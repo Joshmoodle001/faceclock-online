@@ -16,8 +16,6 @@ let faceLandmarker: FaceLandmarker | null = null;
 let lastBox: FaceBox | null = null;
 let lastFaceTime = 0;
 let initPromise: Promise<void> | null = null;
-let detecting = false;
-
 const FACE_TIMEOUT_MS = 2000;
 const INIT_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.35/wasm';
 const MODEL_URL = 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/latest/face_landmarker.task';
@@ -95,9 +93,6 @@ function smoothBox(
 export async function detectFace(
   video: HTMLVideoElement
 ): Promise<FaceResult | null> {
-  if (detecting) return lastBox ? { box: lastBox, confidence: 0.3 } : null;
-  detecting = true;
-
   try {
     if (!faceLandmarker) {
       await initFaceDetection();
@@ -138,8 +133,6 @@ export async function detectFace(
     }
     lastBox = null;
     return null;
-  } finally {
-    detecting = false;
   }
 }
 

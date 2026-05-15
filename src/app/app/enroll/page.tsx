@@ -34,13 +34,16 @@ export default function EnrollPage() {
   const [livenessScore, setLivenessScore] = useState(0);
   const [livenessPassed, setLivenessPassed] = useState(false);
   const [livenessProgress, setLivenessProgress] = useState(0);
+  const [livenessRunning, setLivenessRunning] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [alreadyEnrolled, setAlreadyEnrolled] = useState(false);
+  const [mediapipeReady, setMediapipeReady] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animRef = useRef<number>(0);
   const motionBufRef = useRef(createMotionBuffer());
+  const livenessStopRef = useRef(false);
 
   useEffect(() => {
     const check = async () => {
@@ -62,7 +65,7 @@ export default function EnrollPage() {
 
   useEffect(() => {
     if (!loading && !alreadyEnrolled) {
-      initFaceDetection().catch(() => {});
+      initFaceDetection().catch(() => {}).finally(() => setMediapipeReady(true));
     }
   }, [loading, alreadyEnrolled]);
 
@@ -97,7 +100,7 @@ export default function EnrollPage() {
     setCameraReady(true);
 
     const detect = async () => {
-      if (!video || video.readyState < 2) {
+      if (livenessStopRef.current || !video || video.readyState < 2) {
         animRef.current = requestAnimationFrame(detect);
         return;
       }
@@ -107,7 +110,6 @@ export default function EnrollPage() {
         if (result) {
           setFaceBox(result.box);
           drawFaceBox(video, canvasRef.current, result.box);
-          pushMotionFrame(motionBufRef.current, result.box);
         } else {
           setFaceBox(null);
           clearCanvas(canvasRef.current);
@@ -133,11 +135,9 @@ export default function EnrollPage() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-
     ctx.strokeStyle = '#22c55e';
     ctx.lineWidth = 3;
     ctx.strokeRect(box.x, box.y, box.width, box.height);
-
     ctx.fillStyle = '#22c55e';
     ctx.font = '14px monospace';
     ctx.fillText('Face', box.x + 4, box.y - 6);
@@ -150,10 +150,13 @@ export default function EnrollPage() {
   };
 
   useEffect(() => {
-    if (step === 1 && cameraPermission === true && streamRef.current) {
+    if (step === 1 && cameraPermission === true && streamRef.current && mediapipeReady) {
       startDetectionLoop();
     }
-  }, [step, cameraPermission]);
+    if (step !== 1) {
+      livenessStopRef.current = false;
+    }
+  }, [step, cameraPermission, mediapipeReady]);
 
   const captureEnrollment = async () => {
     const video = videoRef.current;
@@ -161,18 +164,15 @@ export default function EnrollPage() {
       setError('No face detected. Please position your face in the frame.');
       return;
     }
-
     if (faceBox.width < 60 || faceBox.height < 60) {
       setError('Face is too small. Please move closer to the camera.');
       return;
     }
-
     const region = captureFaceRegion(video, faceBox, 64);
     if (!region) {
       setError('Failed to capture face region. Please try again.');
       return;
     }
-
     const hash = computeAverageHash(region);
     setFaceHash(hash);
     setStep(2);
@@ -182,6 +182,9 @@ export default function EnrollPage() {
     const video = videoRef.current;
     if (!video) return;
 
+    livenessStopRef.current = true;
+    cancelAnimationFrame(animRef.current);
+    setLivenessRunning(true);
     motionBufRef.current = createMotionBuffer();
     setLivenessProgress(0);
 
@@ -200,6 +203,8 @@ export default function EnrollPage() {
     const score = computeMotionScore(motionBufRef.current);
     setLivenessScore(score);
     setLivenessPassed(score > 0.05);
+    setLivenessRunning(false);
+    livenessStopRef.current = false;
   };
 
   const submitEnrollment = async () => {
@@ -208,28 +213,25 @@ export default function EnrollPage() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
-
       const { data: profile } = await supabase
         .from('profiles')
         .select('organization_id')
         .eq('user_id', user.id)
         .maybeSingle();
       if (!profile?.organization_id) throw new Error('Organization not found');
-
       const { error: insertError } = await supabase
         .from('face_enrollments')
         .insert({
           organization_id: profile.organization_id,
           user_id: user.id,
-          model_name: 'native-face-detector',
-          model_version: '1.0.0',
+          model_name: 'mediapipe-face-landmarker',
+          model_version: '0.10.35',
           quality_score: faceHash ? 95 : 85,
           liveness_score: Math.round(livenessScore * 100),
           face_descriptor: faceHash ? [...faceHash].map(c => c.charCodeAt(0)) : null,
           status: 'approved',
           active: true,
         });
-
       if (insertError) throw insertError;
       setStep(4);
     } catch (err) {
@@ -264,6 +266,10 @@ export default function EnrollPage() {
       </div>
     );
   }
+
+  const showCamera = step >= 1 && step <= 3 && cameraPermission === true;
+  const showCameraCard = step === 1;
+  const showLiveness = step === 3;
 
   return (
     <div className="min-h-screen p-4 max-w-lg mx-auto">
@@ -302,8 +308,7 @@ export default function EnrollPage() {
                 <p className="font-medium">Biometric Data Usage</p>
                 <p className="text-muted-foreground mt-1">
                   Your facial data will be used only for identity verification during attendance
-                  events. Raw images are processed locally and never stored. Only mathematical
-                  templates are saved securely.
+                  events. Raw images are processed locally and never stored.
                 </p>
               </div>
             </div>
@@ -342,7 +347,10 @@ export default function EnrollPage() {
                 title="Camera Access"
                 description="We need camera access to capture your face for enrollment."
                 actionLabel="Enable Camera"
-                onAction={() => startCamera().then(s => { if (s) startDetectionLoop(); })}
+                onAction={async () => {
+                  const s = await startCamera();
+                  if (s && mediapipeReady) startDetectionLoop();
+                }}
                 onDismiss={() => router.push('/app/clock')}
               />
             ) : cameraPermission === false ? (
@@ -357,24 +365,25 @@ export default function EnrollPage() {
                   <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
                   <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
                 </div>
-                {cameraReady && (
+                {!mediapipeReady && (
+                  <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    Loading face detection engine...
+                  </div>
+                )}
+                {cameraReady && mediapipeReady && (
                   <div className="flex items-center justify-center gap-2 text-sm">
                     <div className={`w-2 h-2 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
                     {faceInFrame ? 'Face detected' : 'No face detected'}
                   </div>
                 )}
-                <ul className="text-sm space-y-1 text-muted-foreground">
-                  <li className="flex items-center gap-2"><Check className="h-3 w-3 text-emerald-500" /> Ensure good lighting</li>
-                  <li className="flex items-center gap-2"><Check className="h-3 w-3 text-emerald-500" /> Remove glasses if heavily reflective</li>
-                  <li className="flex items-center gap-2"><Check className="h-3 w-3 text-emerald-500" /> Look directly at the camera</li>
-                </ul>
               </>
             )}
           </CardContent>
           <CardFooter>
             <Button
               className="w-full"
-              disabled={cameraPermission !== true || !faceInFrame || !faceBox || (faceBox?.width || 0) < 60}
+              disabled={cameraPermission !== true || !mediapipeReady || !faceInFrame}
               onClick={captureEnrollment}
             >
               Capture & Continue
@@ -383,11 +392,26 @@ export default function EnrollPage() {
         </Card>
       )}
 
+      {(step === 2 || step === 3) && showCamera && (
+        <div className="mb-4">
+          <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
+          </div>
+          {step === 3 && livenessRunning && (
+            <div className="flex items-center justify-center gap-2 mt-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking... {Math.round(livenessProgress)}%
+            </div>
+          )}
+        </div>
+      )}
+
       {step === 2 && (
         <Card>
           <CardHeader>
             <CardTitle>Quality Check</CardTitle>
-            <CardDescription>Verifying face detection</CardDescription>
+            <CardDescription>Verifying face capture</CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-3">
@@ -400,10 +424,6 @@ export default function EnrollPage() {
                 <span className="text-xs font-mono text-muted-foreground">
                   {faceHash ? `${faceHash.slice(0, 16)}...` : 'N/A'}
                 </span>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-sm">Enrollment Ready</span>
-                <Check className="h-5 w-5 text-emerald-500" />
               </div>
             </div>
             <div className="flex items-center gap-2 text-sm text-emerald-600 bg-emerald-50 dark:bg-emerald-950/30 p-3 rounded-lg">
@@ -436,27 +456,29 @@ export default function EnrollPage() {
                   <CheckCircle2 className="h-4 w-4" /> Liveness check passed
                 </div>
               </>
-            ) : livenessProgress > 0 ? (
-              <div className="space-y-4">
-                <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Checking... {Math.round(livenessProgress)}%
-                </div>
-                <div className="w-full bg-muted rounded-full h-2">
-                  <div className="bg-primary h-2 rounded-full transition-all duration-300" style={{ width: `${livenessProgress}%` }} />
-                </div>
+            ) : livenessRunning ? (
+              <div className="w-full bg-muted rounded-full h-2">
+                <div className="bg-primary h-2 rounded-full transition-all duration-300" style={{ width: `${livenessProgress}%` }} />
               </div>
             ) : (
               <div className="text-center space-y-4">
                 <p className="text-sm text-muted-foreground">
-                  Move your head slightly or blink naturally while looking at the camera.
+                  Move your head slightly or blink naturally while looking at the camera preview above.
                 </p>
-                <Button onClick={runLivenessCheck}>Start Liveness Check</Button>
+                <Button onClick={runLivenessCheck} disabled={!mediapipeReady}>
+                  Start Liveness Check
+                </Button>
+              </div>
+            )}
+            {!mediapipeReady && (
+              <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading face detection engine...
               </div>
             )}
           </CardContent>
           <CardFooter className="flex gap-3">
-            <Button variant="outline" onClick={() => { setStep(2); setLivenessPassed(false); setLivenessScore(0); setLivenessProgress(0); }}>Back</Button>
+            <Button variant="outline" onClick={() => { setStep(2); setLivenessPassed(false); setLivenessScore(0); setLivenessProgress(0); setLivenessRunning(false); }}>Back</Button>
             <Button disabled={!livenessPassed || submitting} onClick={submitEnrollment}>
               {submitting ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : null}
               {submitting ? 'Submitting...' : 'Submit Enrollment'}
