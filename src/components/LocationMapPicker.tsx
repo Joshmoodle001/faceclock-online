@@ -115,9 +115,11 @@ export function LocationMapPicker({
     const el = containerRef.current;
     if (!el || mapRef.current) return;
 
-    const init = () => {
-      if (el.clientWidth === 0 || el.clientHeight === 0) return;
-      observer?.disconnect();
+    let cancelled = false;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const buildMap = () => {
+      if (cancelled || mapRef.current) return;
       try {
         const map = new maplibregl.Map({
           container: el,
@@ -157,18 +159,18 @@ export function LocationMapPicker({
         mapRef.current = map;
         markerRef.current = marker;
       } catch (err) {
-        console.warn('Map init failed, retrying...', err);
-        observer = new ResizeObserver(init);
-        observer.observe(el);
+        console.warn('Map init failed, retrying in 200ms...', err);
+        if (!cancelled) {
+          retryTimer = setTimeout(() => requestAnimationFrame(buildMap), 200);
+        }
       }
     };
 
-    let observer = new ResizeObserver(init);
-    observer.observe(el);
-    init();
+    requestAnimationFrame(buildMap);
 
     return () => {
-      observer?.disconnect();
+      cancelled = true;
+      if (retryTimer) clearTimeout(retryTimer);
       if (mapRef.current) {
         mapRef.current.remove();
         mapRef.current = null;
