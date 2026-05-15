@@ -9,10 +9,8 @@ import { Button } from '@/components/ui/button';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionPrompt } from '@/components/PermissionPrompt';
 import { OfflineQueueStatus } from '@/components/OfflineQueueStatus';
-import { ClockActionButton } from '@/components/ClockActionButton';
-import { ClockResultCard } from '@/components/ClockResultCard';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
-import { Camera, MapPin, WifiOff, AlertCircle, Smartphone } from 'lucide-react';
+import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import {
   detectFace,
@@ -25,6 +23,8 @@ import {
 import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
+const DETECT_INTERVAL = 600;
+const AUTO_CLOCK_OUT_DELAY = 15000;
 
 interface QueuedEvent {
   client_event_id: string;
@@ -39,14 +39,12 @@ export default function HomePage() {
   const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
-  const [modelsLoading, setModelsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any | null>(null);
   const [userName, setUserName] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentSession, setCurrentSession] = useState<AttendanceSession | null>(null);
   const [clockResult, setClockResult] = useState<ClockResult | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [online, setOnline] = useState(navigator.onLine);
   const [cameraPermission, setCameraPermission] = useState<PermissionState | null>(null);
   const [locationPermission, setLocationPermission] = useState<PermissionState | null>(null);
@@ -55,14 +53,18 @@ export default function HomePage() {
   const [deviceFingerprint, setDeviceFingerprint] = useState('');
   const [faceInFrame, setFaceInFrame] = useState(false);
   const [faceConfidence, setFaceConfidence] = useState(0);
+  const [faceMatched, setFaceMatched] = useState(false);
   const [enrolledDescriptor, setEnrolledDescriptor] = useState<Float32Array | null>(null);
-  const [livenessScore, setLivenessScore] = useState(0);
+  const [modelsReady, setModelsReady] = useState(false);
+  const [autoStatus, setAutoStatus] = useState<'idle' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
+  const [lastMatchScore, setLastMatchScore] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const livenessRef = useRef<LivenessChecker | null>(null);
-  const animRef = useRef<number>(0);
   const lastDescriptorRef = useRef<Float32Array | null>(null);
+  const faceLostAtRef = useRef<number | null>(null);
+  const autoInProgressRef = useRef(false);
+  const lastMatchRef = useRef<number>(0);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -118,7 +120,9 @@ export default function HomePage() {
             .eq('user_id', authUser.id)
             .eq('status', 'open')
             .maybeSingle();
-          setCurrentSession(session as AttendanceSession | null);
+          const s = session as AttendanceSession | null;
+          setCurrentSession(s);
+          if (s) setAutoStatus('clocked_in');
         }
 
         const camStatus = await navigator.permissions.query({ name: 'camera' as PermissionName });
@@ -142,16 +146,16 @@ export default function HomePage() {
 
   useEffect(() => {
     if (!loading) {
-      loadModels().catch(() => {}).finally(() => setModelsLoading(false));
+      loadModels().catch(() => {}).finally(() => setModelsReady(true));
     }
   }, [loading]);
 
   useEffect(() => {
-    if (cameraPermission === 'granted') {
+    if (cameraPermission === 'granted' && modelsReady) {
       startCamera();
     }
     return () => { stopCamera(); };
-  }, [cameraPermission]);
+  }, [cameraPermission, modelsReady]);
 
   const startCamera = async () => {
     try {
@@ -166,7 +170,6 @@ export default function HomePage() {
   };
 
   const stopCamera = () => {
-    cancelAnimationFrame(animRef.current);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -175,33 +178,65 @@ export default function HomePage() {
 
   const startDetectionLoop = () => {
     livenessRef.current = new LivenessChecker();
+    let running = true;
+
     const loop = async () => {
+      if (!running) return;
       const video = videoRef.current;
       if (!video || !streamRef.current) {
-        animRef.current = requestAnimationFrame(loop);
+        setTimeout(loop, DETECT_INTERVAL);
         return;
       }
       try {
         const result = await detectFace(video);
-        if (result) {
+        if (result && result.detection.score > 0.5) {
           setFaceInFrame(true);
           setFaceConfidence(result.detection.score);
           lastDescriptorRef.current = result.descriptor;
+          faceLostAtRef.current = null;
+
           if (livenessRef.current) {
             livenessRef.current.feedFrame(result.landmarks);
+          }
+
+          if (user && enrolledDescriptor) {
+            const score = computeMatchScore(result.descriptor, enrolledDescriptor);
+            setLastMatchScore(score);
+            if (score > 0.5) {
+              setFaceMatched(true);
+              lastMatchRef.current = Date.now();
+              if (!currentSession && !autoInProgressRef.current) {
+                triggerAutoClockIn();
+              }
+            } else {
+              setFaceMatched(false);
+            }
           }
         } else {
           setFaceInFrame(false);
           setFaceConfidence(0);
+          setFaceMatched(false);
+          if (currentSession && faceLostAtRef.current === null) {
+            faceLostAtRef.current = Date.now();
+          }
         }
       } catch {
         setFaceInFrame(false);
         setFaceConfidence(0);
       }
-      animRef.current = requestAnimationFrame(loop);
+      setTimeout(loop, DETECT_INTERVAL);
     };
-    animRef.current = requestAnimationFrame(loop);
+    setTimeout(loop, 500);
   };
+
+  useEffect(() => {
+    if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in') {
+      const elapsed = Date.now() - faceLostAtRef.current;
+      if (elapsed > AUTO_CLOCK_OUT_DELAY && !autoInProgressRef.current) {
+        triggerAutoClockOut();
+      }
+    }
+  }, [faceInFrame, currentSession, autoStatus]);
 
   const requestCamera = async () => {
     try {
@@ -231,127 +266,146 @@ export default function HomePage() {
       navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 })
     );
 
-  const computeRealScores = async () => {
-    let faceMatchScore = 0;
-    let liveness = 0;
-
-    const currentDesc = lastDescriptorRef.current;
-
-    if (currentDesc && enrolledDescriptor) {
-      faceMatchScore = computeMatchScore(currentDesc, enrolledDescriptor);
-    } else if (!faceInFrame) {
-      faceMatchScore = 0;
-    } else {
-      faceMatchScore = 0.5;
-    }
-
-    if (livenessRef.current) {
-      const result = livenessRef.current.getResult();
-      liveness = result.score;
-    } else {
-      liveness = faceInFrame ? 0.3 : 0;
-    }
-
-    setLivenessScore(liveness);
-
-    return {
-      face_match_score: faceMatchScore,
-      liveness_score: liveness,
-    };
-  };
-
-  const handleClockAction = async (eventType: ClockEventType) => {
-    setIsSubmitting(true);
-    setClockResult(null);
+  const triggerAutoClockIn = async () => {
+    if (autoInProgressRef.current) return;
+    autoInProgressRef.current = true;
+    setAutoStatus('clocking_in');
     setError(null);
 
     try {
-      const { data: { user: authUser } } = await supabase.auth.getUser();
-      if (!authUser) { router.push('/login'); return; }
-
-      const scores = await computeRealScores();
+      const { data: { user: u } } = await supabase.auth.getUser();
+      if (!u) { autoInProgressRef.current = false; return; }
 
       let lat: number | undefined;
       let lng: number | undefined;
       let accuracy: number | undefined;
-
       if (locationPermission === 'granted') {
         try {
           const pos = await getLocation();
           lat = pos.coords.latitude;
           lng = pos.coords.longitude;
           accuracy = pos.coords.accuracy;
-        } catch { /* location unavailable */ }
+        } catch { /* skip */ }
       }
 
-      if (scores.face_match_score < 0.4 && eventType !== 'break_start' && eventType !== 'break_end') {
-        setError('Face does not match enrolled profile. Please position your face clearly in the camera.');
-        setIsSubmitting(false);
+      const desc = lastDescriptorRef.current;
+      let faceMatchScore = 0;
+      let liveness = 0;
+      if (desc && enrolledDescriptor) {
+        faceMatchScore = computeMatchScore(desc, enrolledDescriptor);
+      }
+      if (livenessRef.current) {
+        liveness = livenessRef.current.getResult().score;
+      }
+
+      if (faceMatchScore < 0.4) {
+        autoInProgressRef.current = false;
+        setAutoStatus('idle');
         return;
       }
 
       const clientEventId = generateClientId();
-      const payload = {
-        event_type: eventType,
-        occurred_at: new Date().toISOString(),
-        client_event_id: clientEventId,
-        latitude: lat ?? 0,
-        longitude: lng ?? 0,
-        accuracy_m: accuracy ?? 0,
-        face_match_score: scores.face_match_score,
-        liveness_score: scores.liveness_score,
-        device_fingerprint: deviceFingerprint,
-        timestamp: new Date().toISOString(),
-      };
-
-      if (!online) {
-        const queue: QueuedEvent[] = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
-        queue.push({
+      const { error: fnError } = await supabase.functions.invoke('submit-clock-event', {
+        body: {
+          event_type: 'clock_in',
+          occurred_at: new Date().toISOString(),
           client_event_id: clientEventId,
-          event_type: eventType,
-          occurred_at: payload.occurred_at,
-          latitude: lat,
-          longitude: lng,
-          accuracy_m: accuracy,
-        });
-        localStorage.setItem(OFFLINE_QUEUE_KEY, JSON.stringify(queue));
-        setQueuedCount(queue.length);
-        setClockResult({
-          decision: 'accepted',
-          clock_event_id: clientEventId,
-          message: 'Event queued offline. Will sync when connection is restored.',
-          risk_scores: { location: 0, device: 0, face_match: 0, liveness: 0, final: 0 },
-        });
-        if (eventType === 'clock_in') {
-          setCurrentSession({ id: 'pending', started_at: payload.occurred_at } as AttendanceSession);
-        } else {
-          setCurrentSession(null);
-        }
-        setIsSubmitting(false);
-        return;
-      }
-
-      const { data, error: fnError } = await supabase.functions.invoke('submit-clock-event', {
-        body: payload,
+          latitude: lat ?? 0,
+          longitude: lng ?? 0,
+          accuracy_m: accuracy ?? 0,
+          face_match_score: faceMatchScore,
+          liveness_score: liveness,
+          device_fingerprint: deviceFingerprint,
+          timestamp: new Date().toISOString(),
+        },
       });
 
       if (fnError) throw new Error(fnError.message);
 
-      const result = data as ClockResult;
-      setClockResult(result);
+      const { data: session } = await supabase
+        .from('attendance_sessions')
+        .select('*')
+        .eq('user_id', u.id)
+        .eq('status', 'open')
+        .maybeSingle();
 
-      if (result.decision === 'accepted') {
-        if (eventType === 'clock_in' || eventType === 'break_end') {
-          setCurrentSession(result.session || null);
-        } else {
-          setCurrentSession(null);
-        }
+      if (session) {
+        setCurrentSession(session as AttendanceSession);
+        setAutoStatus('clocked_in');
+        setClockResult({
+          decision: 'accepted',
+          clock_event_id: clientEventId,
+          message: 'Auto clocked in',
+          risk_scores: { location: 0, device: 0, face_match: Math.round(faceMatchScore * 100), liveness: Math.round(liveness * 100), final: 0 },
+        });
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Clock action failed');
+      setError(err instanceof Error ? err.message : 'Auto clock-in failed');
+      setAutoStatus('idle');
     } finally {
-      setIsSubmitting(false);
+      autoInProgressRef.current = false;
     }
+  };
+
+  const triggerAutoClockOut = async () => {
+    if (autoInProgressRef.current) return;
+    autoInProgressRef.current = true;
+    setAutoStatus('clocking_out');
+    setError(null);
+
+    try {
+      const { data: { user: u } } = await supabase.auth.getUser();
+      if (!u || !currentSession) { autoInProgressRef.current = false; return; }
+
+      let lat: number | undefined;
+      let lng: number | undefined;
+      let accuracy: number | undefined;
+      if (locationPermission === 'granted') {
+        try {
+          const pos = await getLocation();
+          lat = pos.coords.latitude;
+          lng = pos.coords.longitude;
+          accuracy = pos.coords.accuracy;
+        } catch { /* skip */ }
+      }
+
+      const clientEventId = generateClientId();
+      const { error: fnError } = await supabase.functions.invoke('submit-clock-event', {
+        body: {
+          event_type: 'clock_out',
+          occurred_at: new Date().toISOString(),
+          client_event_id: clientEventId,
+          latitude: lat ?? 0,
+          longitude: lng ?? 0,
+          accuracy_m: accuracy ?? 0,
+          face_match_score: 0,
+          liveness_score: 0,
+          device_fingerprint: deviceFingerprint,
+          timestamp: new Date().toISOString(),
+        },
+      });
+
+      if (fnError) throw new Error(fnError.message);
+
+      setCurrentSession(null);
+      setAutoStatus('idle');
+      faceLostAtRef.current = null;
+      setClockResult({
+        decision: 'accepted',
+        clock_event_id: clientEventId,
+        message: 'Auto clocked out (face left frame)',
+        risk_scores: { location: 0, device: 0, face_match: 0, liveness: 0, final: 0 },
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Auto clock-out failed');
+    } finally {
+      autoInProgressRef.current = false;
+    }
+  };
+
+  const handleSignOut = async () => {
+    await supabase.auth.signOut();
+    router.push('/');
   };
 
   if (loading) {
@@ -371,6 +425,40 @@ export default function HomePage() {
 
   return (
     <div className="min-h-screen p-4 max-w-lg mx-auto space-y-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-2">
+          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
+            <Camera className="h-4 w-4 text-primary-foreground" />
+          </div>
+          <span className="font-semibold text-sm">FaceAttend</span>
+        </div>
+        <div className="flex items-center gap-2">
+          {user && (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/app/enroll">Enroll</Link>
+              </Button>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/login">Admin</Link>
+              </Button>
+              <Button variant="ghost" size="icon" onClick={handleSignOut}>
+                <LogOut className="h-4 w-4" />
+              </Button>
+            </>
+          )}
+          {!user && (
+            <>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/login?redirect=/app/enroll">Enroll</Link>
+              </Button>
+              <Button variant="ghost" size="sm" asChild>
+                <Link href="/login">Admin</Link>
+              </Button>
+            </>
+          )}
+        </div>
+      </div>
+
       {!online && (
         <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
           <CardContent className="flex items-center gap-3 py-3 text-sm">
@@ -387,6 +475,14 @@ export default function HomePage() {
           <CardContent className="flex items-center gap-3 py-3 text-sm">
             <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
             {error}
+          </CardContent>
+        </Card>
+      )}
+
+      {clockResult && (
+        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+          <CardContent className="py-3 text-sm text-center">
+            {clockResult.message}
           </CardContent>
         </Card>
       )}
@@ -428,51 +524,66 @@ export default function HomePage() {
         )}
       </div>
 
-      {user && cameraPermission === 'granted' && (
-        <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+      {cameraPermission === 'granted' && (
+        <div className="flex items-center justify-center gap-4 px-1 text-xs text-muted-foreground">
           <span className={`flex items-center gap-1 ${faceInFrame ? 'text-emerald-500' : 'text-amber-500'}`}>
-            <span className={`w-1.5 h-1.5 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            <span className={`w-1.5 h-1.5 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
             {faceInFrame ? `Face: ${(faceConfidence * 100).toFixed(0)}%` : 'No face detected'}
           </span>
-          {enrolledDescriptor && (
-            <span>Enrolled: Yes</span>
+          {user && enrolledDescriptor && (
+            <span className={`flex items-center gap-1 ${faceMatched ? 'text-emerald-500' : 'text-muted-foreground'}`}>
+              Match: {(lastMatchScore * 100).toFixed(0)}%
+            </span>
           )}
-          {modelsLoading && <span>Loading models...</span>}
+          {user && !modelsReady && <span>Loading models...</span>}
         </div>
+      )}
+
+      {user && autoStatus === 'clocking_in' && (
+        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="py-3 text-sm text-center">Auto clocking in...</CardContent>
+        </Card>
+      )}
+
+      {user && autoStatus === 'clocked_in' && (
+        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+          <CardContent className="py-3 text-sm text-center">
+            <span className="font-medium text-emerald-700 dark:text-emerald-400">Clocked In</span>
+            {!faceInFrame && faceLostAtRef.current && (
+              <span className="text-muted-foreground ml-2">
+                (Auto clock-out in {(AUTO_CLOCK_OUT_DELAY - (Date.now() - faceLostAtRef.current)) / 1000 | 0}s)
+              </span>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {user && autoStatus === 'clocking_out' && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+          <CardContent className="py-3 text-sm text-center">Auto clocking out...</CardContent>
+        </Card>
+      )}
+
+      {user && !currentSession && !modelsReady && (
+        <Card>
+          <CardContent className="py-4 text-sm text-center text-muted-foreground">
+            Loading face detection models...
+          </CardContent>
+        </Card>
+      )}
+
+      {user && !currentSession && modelsReady && !enrolledDescriptor && (
+        <Card>
+          <CardContent className="py-6 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No face enrollment found.</p>
+            <Button size="sm" asChild>
+              <Link href="/app/enroll">Enroll Now</Link>
+            </Button>
+          </CardContent>
+        </Card>
       )}
 
       {position && <GeofenceStatusCard latitude={position.coords.latitude} longitude={position.coords.longitude} accuracy={position.coords.accuracy} />}
-
-      {user ? (
-        <div className="space-y-3">
-          <ClockActionButton
-            isClockedIn={!!currentSession}
-            onClick={(type) => handleClockAction(type)}
-            disabled={isSubmitting || cameraPermission !== 'granted' || modelsLoading}
-            loading={isSubmitting}
-          />
-          {currentSession && !isSubmitting && (
-            <Button variant="outline" className="w-full" onClick={() => handleClockAction('break_start')}>
-              Start Break
-            </Button>
-          )}
-          {currentSession && !isSubmitting && (
-            <Button variant="outline" className="w-full" onClick={() => handleClockAction('break_end')}>
-              End Break
-            </Button>
-          )}
-          {clockResult && <ClockResultCard result={clockResult} />}
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <Button size="lg" className="w-full" asChild>
-            <Link href="/login?redirect=/app/enroll">Enrollment</Link>
-          </Button>
-          <Button variant="outline" className="w-full" asChild>
-            <Link href="/login">Admins Only</Link>
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
