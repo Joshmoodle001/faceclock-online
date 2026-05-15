@@ -321,7 +321,7 @@ export default function HomePage() {
       )}
 
       <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
-        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
         {cameraPermission !== 'granted' && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Smartphone className="h-8 w-8 text-muted-foreground" />
@@ -354,7 +354,7 @@ export default function HomePage() {
       ) : (
         <div className="space-y-3">
           <Button size="lg" className="w-full" asChild>
-            <Link href="/login">Sign In to Clock</Link>
+            <Link href="/login?redirect=/app/enroll">Enrollment</Link>
           </Button>
           <Button variant="outline" className="w-full" asChild>
             <Link href="/login">Admins Only</Link>

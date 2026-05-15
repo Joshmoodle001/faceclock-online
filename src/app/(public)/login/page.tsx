@@ -29,6 +29,11 @@ export default function LoginPage() {
     resolver: zodResolver(loginSchema),
   });
 
+  const getRedirect = () => {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('redirect');
+  };
+
   const onSubmit = async (data: LoginData) => {
     setError(null);
     const { error: signInError } = await supabase.auth.signInWithPassword({
@@ -39,6 +44,8 @@ export default function LoginPage() {
       setError(signInError.message);
       return;
     }
+    const redirectTo = getRedirect();
+    if (redirectTo) { router.push(redirectTo); return; }
     await redirectByRole();
   };
 
