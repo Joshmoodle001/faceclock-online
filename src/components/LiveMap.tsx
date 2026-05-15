@@ -31,7 +31,7 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
 
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [28.0473, -26.2041],
       zoom: 10,
     });

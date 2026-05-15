@@ -115,7 +115,7 @@ export function LocationMapPicker({
     if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [longitude || 28.0473, latitude || -26.2041],
       zoom: 13,
     });

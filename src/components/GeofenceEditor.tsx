@@ -47,7 +47,7 @@ export function GeofenceEditor({
     if (!containerRef.current || mapRef.current) return;
     const map = new maplibregl.Map({
       container: containerRef.current,
-      style: 'https://demotiles.maplibre.org/style.json',
+      style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [initialLongitude, initialLatitude],
       zoom: 14,
     });
