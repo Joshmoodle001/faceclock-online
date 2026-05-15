@@ -205,6 +205,7 @@ export default function EnrollPage() {
     setLivenessPassed(score > 0.05);
     setLivenessRunning(false);
     livenessStopRef.current = false;
+    startDetectionLoop();
   };
 
   const submitEnrollment = async () => {
@@ -334,6 +335,33 @@ export default function EnrollPage() {
         </Card>
       )}
 
+      {showCamera && (
+        <div className="mb-4">
+          <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
+            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
+          </div>
+          {!mediapipeReady && (
+            <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading face detection engine...
+            </div>
+          )}
+          {cameraReady && mediapipeReady && step === 1 && (
+            <div className="flex items-center justify-center gap-2 text-sm">
+              <div className={`w-2 h-2 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+              {faceInFrame ? 'Face detected' : 'No face detected'}
+            </div>
+          )}
+          {step === 3 && livenessRunning && (
+            <div className="flex items-center justify-center gap-2 mt-2 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Checking... {Math.round(livenessProgress)}%
+            </div>
+          )}
+        </div>
+      )}
+
       {step === 1 && (
         <Card>
           <CardHeader>
@@ -359,26 +387,7 @@ export default function EnrollPage() {
                 <p className="font-medium">Camera access denied</p>
                 <p className="text-sm text-muted-foreground">Please enable camera access in your browser settings.</p>
               </div>
-            ) : (
-              <>
-                <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
-                  <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
-                  <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
-                </div>
-                {!mediapipeReady && (
-                  <div className="flex items-center justify-center gap-2 py-2 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Loading face detection engine...
-                  </div>
-                )}
-                {cameraReady && mediapipeReady && (
-                  <div className="flex items-center justify-center gap-2 text-sm">
-                    <div className={`w-2 h-2 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-                    {faceInFrame ? 'Face detected' : 'No face detected'}
-                  </div>
-                )}
-              </>
-            )}
+            ) : null}
           </CardContent>
           <CardFooter>
             <Button
@@ -390,21 +399,6 @@ export default function EnrollPage() {
             </Button>
           </CardFooter>
         </Card>
-      )}
-
-      {(step === 2 || step === 3) && showCamera && (
-        <div className="mb-4">
-          <div className="relative aspect-[4/3] bg-muted rounded-lg overflow-hidden">
-            <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
-            <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
-          </div>
-          {step === 3 && livenessRunning && (
-            <div className="flex items-center justify-center gap-2 mt-2 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Checking... {Math.round(livenessProgress)}%
-            </div>
-          )}
-        </div>
       )}
 
       {step === 2 && (
