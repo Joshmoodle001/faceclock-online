@@ -8,8 +8,8 @@ interface ClockEventInput {
   event_type: EventType;
   occurred_at: string;
   client_event_id: string;
-  site_id: string;
-  geofence_id: string;
+  site_id?: string;
+  geofence_id?: string;
   latitude: number;
   longitude: number;
   accuracy_m: number;
@@ -184,8 +184,8 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const requiredFields: (keyof ClockEventInput)[] = [
-      "event_type", "occurred_at", "client_event_id", "site_id",
-      "geofence_id", "latitude", "longitude", "accuracy_m",
+      "event_type", "occurred_at", "client_event_id",
+      "latitude", "longitude", "accuracy_m",
       "face_match_score", "liveness_score", "device_fingerprint", "timestamp",
     ];
 
@@ -237,60 +237,62 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    const { data: geofence, error: geofenceError } = await supabase
-      .from("geofences")
-      .select("id, site_id, name, type, radius_m, center_geog, polygon_geom, grace_distance_m, active")
-      .eq("id", input.geofence_id)
-      .eq("site_id", input.site_id)
-      .single();
-
-    if (geofenceError || !geofence) {
-      return errorResponse(400, "Invalid geofence_id");
-    }
-
-    if (!geofence.active) {
-      return errorResponse(400, "Geofence is not active");
-    }
-
+    let geofence: Geofence | null = null;
     let withinGeofence = false;
     let distanceFromBoundary = 0;
 
-    if (geofence.type === "circle") {
-      if (geofence.center_geog && geofence.radius_m) {
-        const { data: dwithinResult, error: dwithinError } = await supabase.rpc(
-          "geofence_check_circle",
+    if (input.geofence_id && input.site_id) {
+      const { data: gf, error: gfError } = await supabase
+        .from("geofences")
+        .select("id, site_id, name, type, radius_m, center_geog, polygon_geom, grace_distance_m, active")
+        .eq("id", input.geofence_id)
+        .eq("site_id", input.site_id)
+        .single();
+
+      if (gfError || !gf) {
+        return errorResponse(400, "Invalid geofence_id");
+      }
+
+      if (!gf.active) {
+        return errorResponse(400, "Geofence is not active");
+      }
+
+      geofence = gf;
+
+      if (gf.type === "circle") {
+        if (gf.center_geog && gf.radius_m) {
+          const { data: dwithinResult, error: dwithinError } = await supabase.rpc(
+            "geofence_check_circle",
+            {
+              p_geofence_id: gf.id,
+              p_latitude: input.latitude,
+              p_longitude: input.longitude,
+            },
+          );
+
+          if (!dwithinError && dwithinResult !== null) {
+            const result = dwithinResult as { within: boolean; distance: number };
+            withinGeofence = result.within;
+            distanceFromBoundary = result.distance;
+          }
+        }
+      } else if (gf.type === "polygon") {
+        const { data: containsResult, error: containsError } = await supabase.rpc(
+          "geofence_check_polygon",
           {
-            p_geofence_id: geofence.id,
+            p_geofence_id: gf.id,
             p_latitude: input.latitude,
             p_longitude: input.longitude,
           },
         );
 
-        if (!dwithinError && dwithinResult !== null) {
-          const result = dwithinResult as { within: boolean; distance: number };
+        if (!containsError && containsResult !== null) {
+          const result = containsResult as { within: boolean; distance: number };
           withinGeofence = result.within;
           distanceFromBoundary = result.distance;
         }
       }
-    } else if (geofence.type === "polygon") {
-      const { data: containsResult, error: containsError } = await supabase.rpc(
-        "geofence_check_polygon",
-        {
-          p_geofence_id: geofence.id,
-          p_latitude: input.latitude,
-          p_longitude: input.longitude,
-        },
-      );
-
-      if (!containsError && containsResult !== null) {
-        const result = containsResult as { within: boolean; distance: number };
-        withinGeofence = result.within;
-        distanceFromBoundary = result.distance;
-      }
     }
-
-    const effectiveGrace = geofence.grace_distance_m || 0;
-    const effectiveThreshold = input.accuracy_m + effectiveGrace;
 
     const submittedAt = new Date().toISOString();
     const locationWkt = `SRID=4326;POINT(${input.longitude} ${input.latitude})`;
@@ -494,7 +496,7 @@ serve(async (req: Request): Promise<Response> => {
       });
     }
 
-    if (decision === "rejected" && distanceFromBoundary > effectiveThreshold) {
+    if (decision === "rejected" && geofence && distanceFromBoundary > (geofence.grace_distance_m || 0) + input.accuracy_m) {
       const { data: rejectedEvent, error: rejectInsertError } = await supabase
         .from("clock_events")
         .insert({
