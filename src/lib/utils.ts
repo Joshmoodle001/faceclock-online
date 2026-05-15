@@ -24,7 +24,13 @@ export function formatTimestamp(ts: string | Date): string {
   return d.toLocaleString();
 }
 
-export function parseWktPoint(wkt: string): { latitude: number; longitude: number } | null {
+export function parseWktPoint(wkt: string | Record<string, unknown> | null): { latitude: number; longitude: number } | null {
+  if (!wkt) return null;
+  if (typeof wkt === 'object') {
+    const coords = (wkt as Record<string, unknown>).coordinates as number[] | undefined;
+    if (coords && coords.length === 2) return { longitude: coords[0], latitude: coords[1] };
+    return null;
+  }
   const m = wkt.match(/POINT\(([\d.-]+) ([\d.-]+)\)/);
   if (!m) return null;
   return { longitude: parseFloat(m[1]), latitude: parseFloat(m[2]) };
