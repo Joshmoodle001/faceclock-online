@@ -1,0 +1,38 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "instructions": ["~/.config/opencode/AGENTS.md"],
+  "permission": {
+    "*": "ask",
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "external_directory": {
+      "~/.config/opencode/**": "allow"
+    },
+    "bash": {
+      "*": "ask",
+      "pwd": "allow",
+      "ls *": "allow",
+      "find *": "allow",
+      "rg *": "allow",
+      "grep *": "allow",
+      "cat *": "allow",
+      "sed *": "allow",
+      "head *": "allow",
+      "tail *": "allow",
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git branch *": "allow",
+      "git remote *": "allow",
+      "git rev-parse *": "allow",
+      "git log *": "allow",
+      "rm *": "deny",
+      "git reset *": "deny",
+      "git clean *": "deny",
+      "git push --force*": "deny"
+    }
+  }
+}
