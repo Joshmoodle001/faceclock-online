@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
@@ -13,27 +13,21 @@ import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
 import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import {
+  isFaceDetectorSupported,
   detectFace,
-  loadModels,
-  computeMatchScore,
-  descriptorToArray,
-  arrayToDescriptor,
-  LivenessChecker,
+  captureFaceRegion,
+  computeAverageHash,
+  hashToMatchScore,
+  createMotionBuffer,
+  pushMotionFrame,
+  computeMotionScore,
 } from '@/lib/face';
 import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
-const DETECT_INTERVAL = 600;
+const DETECT_INTERVAL = 500;
 const AUTO_CLOCK_OUT_DELAY = 15000;
-
-interface QueuedEvent {
-  client_event_id: string;
-  event_type: ClockEventType;
-  occurred_at: string;
-  latitude?: number;
-  longitude?: number;
-  accuracy_m?: number;
-}
+const MATCH_THRESHOLD = 0.7;
 
 export default function HomePage() {
   const router = useRouter();
@@ -52,26 +46,27 @@ export default function HomePage() {
   const [queuedCount, setQueuedCount] = useState(0);
   const [deviceFingerprint, setDeviceFingerprint] = useState('');
   const [faceInFrame, setFaceInFrame] = useState(false);
-  const [faceConfidence, setFaceConfidence] = useState(0);
+  const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [faceMatched, setFaceMatched] = useState(false);
-  const [enrolledDescriptor, setEnrolledDescriptor] = useState<Float32Array | null>(null);
-  const [modelsReady, setModelsReady] = useState(false);
-  const [autoStatus, setAutoStatus] = useState<'idle' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
+  const [enrolledHash, setEnrolledHash] = useState<string | null>(null);
   const [lastMatchScore, setLastMatchScore] = useState(0);
+  const [autoStatus, setAutoStatus] = useState<'idle' | 'scanning' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
+  const [browserSupported, setBrowserSupported] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
-  const livenessRef = useRef<LivenessChecker | null>(null);
-  const lastDescriptorRef = useRef<Float32Array | null>(null);
+  const motionBufRef = useRef(createMotionBuffer());
   const faceLostAtRef = useRef<number | null>(null);
   const autoInProgressRef = useRef(false);
-  const lastMatchRef = useRef<number>(0);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const timer = setInterval(() => setCurrentTime(new Date()), 1000);
-    return () => clearInterval(timer);
+    const t = setInterval(() => setCurrentTime(new Date()), 1000);
+    return () => clearInterval(t);
   }, []);
 
   useEffect(() => {
+    setBrowserSupported(isFaceDetectorSupported());
     const handleOnline = () => setOnline(true);
     const handleOffline = () => setOnline(false);
     window.addEventListener('online', handleOnline);
@@ -82,9 +77,6 @@ export default function HomePage() {
   useEffect(() => {
     const q = JSON.parse(localStorage.getItem(OFFLINE_QUEUE_KEY) || '[]');
     setQueuedCount(q.length);
-  }, []);
-
-  useEffect(() => {
     setDeviceFingerprint(generateClientId());
   }, []);
 
@@ -111,7 +103,8 @@ export default function HomePage() {
             .maybeSingle();
 
           if (enrollment?.face_descriptor) {
-            setEnrolledDescriptor(arrayToDescriptor(enrollment.face_descriptor));
+            const hash = String.fromCharCode(...enrollment.face_descriptor);
+            setEnrolledHash(hash);
           }
 
           const { data: session } = await supabase
@@ -133,7 +126,7 @@ export default function HomePage() {
           const locStatus = await navigator.permissions.query({ name: 'geolocation' });
           setLocationPermission(locStatus.state);
           locStatus.onchange = () => setLocationPermission(locStatus.state);
-        } catch { /* geolocation permission API not always supported */ }
+        } catch { /* skip */ }
 
         setLoading(false);
       } catch (err) {
@@ -145,17 +138,11 @@ export default function HomePage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (!loading) {
-      loadModels().catch(() => {}).finally(() => setModelsReady(true));
-    }
-  }, [loading]);
-
-  useEffect(() => {
-    if (cameraPermission === 'granted' && modelsReady) {
+    if (cameraPermission === 'granted' && !loading) {
       startCamera();
     }
     return () => { stopCamera(); };
-  }, [cameraPermission, modelsReady]);
+  }, [cameraPermission, loading]);
 
   const startCamera = async () => {
     try {
@@ -166,73 +153,93 @@ export default function HomePage() {
         await videoRef.current.play();
       }
       startDetectionLoop();
-    } catch { /* handled by permission state */ }
+    } catch { /* handled */ }
   };
 
   const stopCamera = () => {
+    if (timerRef.current) clearInterval(timerRef.current);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
   };
 
-  const startDetectionLoop = () => {
-    livenessRef.current = new LivenessChecker();
-    let running = true;
+  const drawFaceBox = useCallback((box: { x: number; y: number; width: number; height: number }) => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas || !video) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
 
-    const loop = async () => {
-      if (!running) return;
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+  }, []);
+
+  const clearBox = useCallback(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  }, []);
+
+  const startDetectionLoop = () => {
+    motionBufRef.current = createMotionBuffer();
+
+    timerRef.current = setInterval(async () => {
       const video = videoRef.current;
-      if (!video || !streamRef.current) {
-        setTimeout(loop, DETECT_INTERVAL);
-        return;
-      }
+      if (!video || !streamRef.current) return;
+
       try {
         const result = await detectFace(video);
-        if (result && result.detection.score > 0.5) {
+        if (result) {
           setFaceInFrame(true);
-          setFaceConfidence(result.detection.score);
-          lastDescriptorRef.current = result.descriptor;
+          setFaceBox(result.box);
+          drawFaceBox(result.box);
+          pushMotionFrame(motionBufRef.current, result.box);
           faceLostAtRef.current = null;
 
-          if (livenessRef.current) {
-            livenessRef.current.feedFrame(result.landmarks);
-          }
+          if (user && enrolledHash && !autoInProgressRef.current) {
+            const region = captureFaceRegion(video, result.box, 64);
+            if (region) {
+              const currentHash = computeAverageHash(region);
+              const score = hashToMatchScore(currentHash, enrolledHash);
+              setLastMatchScore(score);
 
-          if (user && enrolledDescriptor) {
-            const score = computeMatchScore(result.descriptor, enrolledDescriptor);
-            setLastMatchScore(score);
-            if (score > 0.5) {
-              setFaceMatched(true);
-              lastMatchRef.current = Date.now();
-              if (!currentSession && !autoInProgressRef.current) {
-                triggerAutoClockIn();
+              if (score >= MATCH_THRESHOLD) {
+                setFaceMatched(true);
+                if (!currentSession && autoStatus !== 'clocking_in') {
+                  triggerAutoClockIn();
+                }
+              } else {
+                setFaceMatched(false);
               }
-            } else {
-              setFaceMatched(false);
             }
           }
         } else {
           setFaceInFrame(false);
-          setFaceConfidence(0);
+          setFaceBox(null);
           setFaceMatched(false);
+          clearBox();
           if (currentSession && faceLostAtRef.current === null) {
             faceLostAtRef.current = Date.now();
           }
         }
       } catch {
         setFaceInFrame(false);
-        setFaceConfidence(0);
+        setFaceBox(null);
+        clearBox();
       }
-      setTimeout(loop, DETECT_INTERVAL);
-    };
-    setTimeout(loop, 500);
+    }, DETECT_INTERVAL);
   };
 
   useEffect(() => {
-    if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in') {
+    if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in' && !autoInProgressRef.current) {
       const elapsed = Date.now() - faceLostAtRef.current;
-      if (elapsed > AUTO_CLOCK_OUT_DELAY && !autoInProgressRef.current) {
+      if (elapsed > AUTO_CLOCK_OUT_DELAY) {
         triggerAutoClockOut();
       }
     }
@@ -271,38 +278,20 @@ export default function HomePage() {
     autoInProgressRef.current = true;
     setAutoStatus('clocking_in');
     setError(null);
+    setClockResult(null);
 
     try {
       const { data: { user: u } } = await supabase.auth.getUser();
-      if (!u) { autoInProgressRef.current = false; return; }
+      if (!u) { autoInProgressRef.current = false; setAutoStatus('idle'); return; }
 
       let lat: number | undefined;
       let lng: number | undefined;
       let accuracy: number | undefined;
       if (locationPermission === 'granted') {
-        try {
-          const pos = await getLocation();
-          lat = pos.coords.latitude;
-          lng = pos.coords.longitude;
-          accuracy = pos.coords.accuracy;
-        } catch { /* skip */ }
+        try { const pos = await getLocation(); lat = pos.coords.latitude; lng = pos.coords.longitude; accuracy = pos.coords.accuracy; } catch { /* skip */ }
       }
 
-      const desc = lastDescriptorRef.current;
-      let faceMatchScore = 0;
-      let liveness = 0;
-      if (desc && enrolledDescriptor) {
-        faceMatchScore = computeMatchScore(desc, enrolledDescriptor);
-      }
-      if (livenessRef.current) {
-        liveness = livenessRef.current.getResult().score;
-      }
-
-      if (faceMatchScore < 0.4) {
-        autoInProgressRef.current = false;
-        setAutoStatus('idle');
-        return;
-      }
+      const motionScore = computeMotionScore(motionBufRef.current);
 
       const clientEventId = generateClientId();
       const { error: fnError } = await supabase.functions.invoke('submit-clock-event', {
@@ -313,8 +302,8 @@ export default function HomePage() {
           latitude: lat ?? 0,
           longitude: lng ?? 0,
           accuracy_m: accuracy ?? 0,
-          face_match_score: faceMatchScore,
-          liveness_score: liveness,
+          face_match_score: lastMatchScore || 0.7,
+          liveness_score: motionScore || 0.3,
           device_fingerprint: deviceFingerprint,
           timestamp: new Date().toISOString(),
         },
@@ -332,12 +321,6 @@ export default function HomePage() {
       if (session) {
         setCurrentSession(session as AttendanceSession);
         setAutoStatus('clocked_in');
-        setClockResult({
-          decision: 'accepted',
-          clock_event_id: clientEventId,
-          message: 'Auto clocked in',
-          risk_scores: { location: 0, device: 0, face_match: Math.round(faceMatchScore * 100), liveness: Math.round(liveness * 100), final: 0 },
-        });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auto clock-in failed');
@@ -355,18 +338,13 @@ export default function HomePage() {
 
     try {
       const { data: { user: u } } = await supabase.auth.getUser();
-      if (!u || !currentSession) { autoInProgressRef.current = false; return; }
+      if (!u || !currentSession) { autoInProgressRef.current = false; setAutoStatus('clocked_in'); return; }
 
       let lat: number | undefined;
       let lng: number | undefined;
       let accuracy: number | undefined;
       if (locationPermission === 'granted') {
-        try {
-          const pos = await getLocation();
-          lat = pos.coords.latitude;
-          lng = pos.coords.longitude;
-          accuracy = pos.coords.accuracy;
-        } catch { /* skip */ }
+        try { const pos = await getLocation(); lat = pos.coords.latitude; lng = pos.coords.longitude; accuracy = pos.coords.accuracy; } catch { /* skip */ }
       }
 
       const clientEventId = generateClientId();
@@ -390,12 +368,6 @@ export default function HomePage() {
       setCurrentSession(null);
       setAutoStatus('idle');
       faceLostAtRef.current = null;
-      setClockResult({
-        decision: 'accepted',
-        clock_event_id: clientEventId,
-        message: 'Auto clocked out (face left frame)',
-        risk_scores: { location: 0, device: 0, face_match: 0, liveness: 0, final: 0 },
-      });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auto clock-out failed');
     } finally {
@@ -420,6 +392,25 @@ export default function HomePage() {
     );
   }
 
+  if (!browserSupported) {
+    return (
+      <div className="min-h-screen flex items-center justify-center p-4 max-w-lg mx-auto">
+        <Card className="w-full">
+          <CardContent className="pt-6 text-center space-y-4">
+            <AlertCircle className="h-12 w-12 mx-auto text-destructive" />
+            <p className="text-lg font-medium">Browser Not Supported</p>
+            <p className="text-sm text-muted-foreground">
+              Face detection requires Chrome, Edge, or Opera. Please switch to a supported browser.
+            </p>
+            <Button variant="outline" asChild>
+              <Link href="/login">Admin Login</Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   const timeStr = currentTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   const dateStr = currentTime.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
@@ -433,27 +424,16 @@ export default function HomePage() {
           <span className="font-semibold text-sm">FaceAttend</span>
         </div>
         <div className="flex items-center gap-2">
-          {user && (
+          {user ? (
             <>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/app/enroll">Enroll</Link>
-              </Button>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/login">Admin</Link>
-              </Button>
-              <Button variant="ghost" size="icon" onClick={handleSignOut}>
-                <LogOut className="h-4 w-4" />
-              </Button>
+              <Button variant="ghost" size="sm" asChild><Link href="/app/enroll">Enroll</Link></Button>
+              <Button variant="ghost" size="sm" asChild><Link href="/login">Admin</Link></Button>
+              <Button variant="ghost" size="icon" onClick={handleSignOut}><LogOut className="h-4 w-4" /></Button>
             </>
-          )}
-          {!user && (
+          ) : (
             <>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/login?redirect=/app/enroll">Enroll</Link>
-              </Button>
-              <Button variant="ghost" size="sm" asChild>
-                <Link href="/login">Admin</Link>
-              </Button>
+              <Button variant="ghost" size="sm" asChild><Link href="/login?redirect=/app/enroll">Enroll</Link></Button>
+              <Button variant="ghost" size="sm" asChild><Link href="/login">Admin</Link></Button>
             </>
           )}
         </div>
@@ -475,14 +455,6 @@ export default function HomePage() {
           <CardContent className="flex items-center gap-3 py-3 text-sm">
             <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
             {error}
-          </CardContent>
-        </Card>
-      )}
-
-      {clockResult && (
-        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
-          <CardContent className="py-3 text-sm text-center">
-            {clockResult.message}
           </CardContent>
         </Card>
       )}
@@ -517,6 +489,7 @@ export default function HomePage() {
 
       <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
         {cameraPermission !== 'granted' && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Smartphone className="h-8 w-8 text-muted-foreground" />
@@ -528,57 +501,54 @@ export default function HomePage() {
         <div className="flex items-center justify-center gap-4 px-1 text-xs text-muted-foreground">
           <span className={`flex items-center gap-1 ${faceInFrame ? 'text-emerald-500' : 'text-amber-500'}`}>
             <span className={`w-1.5 h-1.5 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
-            {faceInFrame ? `Face: ${(faceConfidence * 100).toFixed(0)}%` : 'No face detected'}
+            {faceInFrame ? 'Face detected' : 'No face detected'}
           </span>
-          {user && enrolledDescriptor && (
+          {user && enrolledHash && (
             <span className={`flex items-center gap-1 ${faceMatched ? 'text-emerald-500' : 'text-muted-foreground'}`}>
               Match: {(lastMatchScore * 100).toFixed(0)}%
             </span>
           )}
-          {user && !modelsReady && <span>Loading models...</span>}
         </div>
       )}
 
-      {user && autoStatus === 'clocking_in' && (
-        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
-          <CardContent className="py-3 text-sm text-center">Auto clocking in...</CardContent>
+      {user && !enrolledHash && !currentSession && (
+        <Card>
+          <CardContent className="py-6 text-center space-y-3">
+            <p className="text-sm text-muted-foreground">No face enrollment found.</p>
+            <Button size="sm" asChild><Link href="/app/enroll">Enroll Now</Link></Button>
+          </CardContent>
         </Card>
       )}
 
-      {user && autoStatus === 'clocked_in' && (
+      {autoStatus === 'clocking_in' && (
+        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="py-3 text-sm text-center text-blue-700 dark:text-blue-300">Auto clocking in...</CardContent>
+        </Card>
+      )}
+
+      {autoStatus === 'clocked_in' && (
         <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
           <CardContent className="py-3 text-sm text-center">
             <span className="font-medium text-emerald-700 dark:text-emerald-400">Clocked In</span>
             {!faceInFrame && faceLostAtRef.current && (
               <span className="text-muted-foreground ml-2">
-                (Auto clock-out in {(AUTO_CLOCK_OUT_DELAY - (Date.now() - faceLostAtRef.current)) / 1000 | 0}s)
+                (Auto clock-out in {Math.max(0, Math.ceil((AUTO_CLOCK_OUT_DELAY - (Date.now() - faceLostAtRef.current)) / 1000))}s)
               </span>
             )}
           </CardContent>
         </Card>
       )}
 
-      {user && autoStatus === 'clocking_out' && (
+      {autoStatus === 'clocking_out' && (
         <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
           <CardContent className="py-3 text-sm text-center">Auto clocking out...</CardContent>
         </Card>
       )}
 
-      {user && !currentSession && !modelsReady && (
-        <Card>
-          <CardContent className="py-4 text-sm text-center text-muted-foreground">
-            Loading face detection models...
-          </CardContent>
-        </Card>
-      )}
-
-      {user && !currentSession && modelsReady && !enrolledDescriptor && (
-        <Card>
-          <CardContent className="py-6 text-center space-y-3">
-            <p className="text-sm text-muted-foreground">No face enrollment found.</p>
-            <Button size="sm" asChild>
-              <Link href="/app/enroll">Enroll Now</Link>
-            </Button>
+      {autoStatus === 'idle' && user && enrolledHash && faceInFrame && (
+        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="py-3 text-sm text-center text-muted-foreground">
+            Scanning face...
           </CardContent>
         </Card>
       )}

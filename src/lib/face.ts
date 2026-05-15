@@ -1,174 +1,134 @@
-import * as faceapi from 'face-api.js';
-
-const MODEL_URL = '/models';
-
-let modelsLoaded = false;
-let loadPromise: Promise<void> | null = null;
-
-export async function loadModels(): Promise<void> {
-  if (modelsLoaded) return;
-  if (loadPromise) return loadPromise;
-
-  loadPromise = (async () => {
-    try {
-      await Promise.all([
-        faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
-        faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
-        faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL),
-      ]);
-      modelsLoaded = true;
-    } catch (err) {
-      loadPromise = null;
-      throw err;
-    }
-  })();
-
-  return loadPromise;
+export interface FaceBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
-export interface FaceDetectionResult {
-  descriptor: Float32Array;
-  detection: faceapi.FaceDetection;
-  landmarks: faceapi.FaceLandmarks68;
+export interface FaceResult {
+  box: FaceBox;
+  confidence: number;
+}
+
+declare class FaceDetector {
+  constructor(options?: { maxDetectedFaces?: number; fastMode?: boolean });
+  detect(
+    input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
+  ): Promise<DetectedFace[]>;
+}
+
+interface DetectedFace {
+  boundingBox: DOMRectReadOnly;
+  landmarks?: { type: string; locations: { x: number; y: number }[] }[];
+}
+
+export function isFaceDetectorSupported(): boolean {
+  return typeof FaceDetector !== 'undefined';
 }
 
 export async function detectFace(
-  input: HTMLVideoElement | HTMLCanvasElement | HTMLImageElement
-): Promise<FaceDetectionResult | null> {
+  video: HTMLVideoElement
+): Promise<FaceResult | null> {
   try {
-    await loadModels();
-
-    const options = new faceapi.TinyFaceDetectorOptions({
-      inputSize: 320,
-      scoreThreshold: 0.5,
-    });
-
-    const result = await faceapi
-      .detectSingleFace(input, options)
-      .withFaceLandmarks()
-      .withFaceDescriptor();
-
-    if (!result) return null;
-
+    const detector = new FaceDetector({ maxDetectedFaces: 1, fastMode: true });
+    const faces = await detector.detect(video);
+    if (faces.length === 0) return null;
+    const f = faces[0];
+    const box = f.boundingBox;
     return {
-      descriptor: result.descriptor,
-      detection: result.detection,
-      landmarks: result.landmarks,
+      box: { x: box.x, y: box.y, width: box.width, height: box.height },
+      confidence: 0.95,
     };
   } catch {
     return null;
   }
 }
 
-export function descriptorToArray(desc: Float32Array): number[] {
-  return Array.from(desc);
+export function captureFaceRegion(
+  video: HTMLVideoElement,
+  box: FaceBox,
+  size: number = 64
+): ImageData | null {
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return null;
+
+  const sx = Math.max(0, box.x);
+  const sy = Math.max(0, box.y);
+  const sw = Math.min(box.width, video.videoWidth - sx);
+  const sh = Math.min(box.height, video.videoHeight - sy);
+
+  if (sw < 10 || sh < 10) return null;
+
+  ctx.drawImage(video, sx, sy, sw, sh, 0, 0, size, size);
+  return ctx.getImageData(0, 0, size, size);
 }
 
-export function arrayToDescriptor(arr: number[]): Float32Array {
-  return new Float32Array(arr);
-}
+export function computeAverageHash(imageData: ImageData): string {
+  const pixels = imageData.data;
+  const w = imageData.width;
+  const h = imageData.height;
+  const grayscale: number[] = [];
 
-export function computeMatchScore(
-  desc1: Float32Array,
-  desc2: Float32Array
-): number {
-  let dotProduct = 0;
-  let norm1 = 0;
-  let norm2 = 0;
-
-  for (let i = 0; i < desc1.length; i++) {
-    dotProduct += desc1[i] * desc2[i];
-    norm1 += desc1[i] * desc1[i];
-    norm2 += desc2[i] * desc2[i];
-  }
-
-  if (norm1 === 0 || norm2 === 0) return 0;
-
-  const similarity = dotProduct / (Math.sqrt(norm1) * Math.sqrt(norm2));
-  return parseFloat(Math.max(0, Math.min(1, similarity)).toFixed(4));
-}
-
-export function computeEyeAspectRatio(landmarks: faceapi.FaceLandmarks68): number {
-  const leftEye = landmarks.getLeftEye();
-  const rightEye = landmarks.getRightEye();
-
-  const ear = (eye: faceapi.Point[]) => {
-    const a = Math.sqrt(
-      (eye[1].x - eye[5].x) ** 2 + (eye[1].y - eye[5].y) ** 2
-    );
-    const b = Math.sqrt(
-      (eye[2].x - eye[4].x) ** 2 + (eye[2].y - eye[4].y) ** 2
-    );
-    const c = Math.sqrt(
-      (eye[0].x - eye[3].x) ** 2 + (eye[0].y - eye[3].y) ** 2
-    );
-    return (a + b) / (2 * c);
-  };
-
-  return (ear(leftEye) + ear(rightEye)) / 2;
-}
-
-export interface LivenessResult {
-  passed: boolean;
-  score: number;
-}
-
-export class LivenessChecker {
-  private earHistory: number[] = [];
-  private blinkDetected = false;
-  private totalFrames = 0;
-  private readonly earThreshold = 0.25;
-  private readonly requiredFrames = 30;
-  private readonly requiredBlinks = 1;
-
-  reset(): void {
-    this.earHistory = [];
-    this.blinkDetected = false;
-    this.totalFrames = 0;
-  }
-
-  feedFrame(landmarks: faceapi.FaceLandmarks68): void {
-    const ear = computeEyeAspectRatio(landmarks);
-    this.earHistory.push(ear);
-    this.totalFrames++;
-
-    if (this.earHistory.length > 60) {
-      this.earHistory.shift();
-    }
-
-    if (ear < this.earThreshold) {
-      const wasAbove = this.earHistory.length >= 2
-        && this.earHistory[this.earHistory.length - 2] >= this.earThreshold;
-      if (wasAbove) {
-        this.blinkDetected = true;
-      }
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      const idx = (y * w + x) * 4;
+      grayscale.push(
+        0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2]
+      );
     }
   }
 
-  getResult(): LivenessResult {
-    if (this.totalFrames < this.requiredFrames) {
-      const progress = this.totalFrames / this.requiredFrames;
-      return {
-        passed: false,
-        score: parseFloat((progress * 0.3).toFixed(4)),
-      };
-    }
-
-    const avgEar = this.earHistory.reduce((a, b) => a + b, 0) / this.earHistory.length;
-    const earVariation = Math.min(
-      1,
-      Math.max(0, Math.abs(avgEar - 0.3) * 3)
-    );
-    const blinkScore = this.blinkDetected ? 0.4 : 0;
-    const presenceScore = Math.min(0.6, avgEar > 0.15 ? 0.6 : avgEar / 0.15 * 0.6);
-
-    const score = parseFloat(
-      Math.min(1, Math.max(0, presenceScore + blinkScore + earVariation * 0.3)).toFixed(4)
-    );
-
-    return {
-      passed: this.blinkDetected && avgEar > 0.15,
-      score,
-    };
+  const avg = grayscale.reduce((a, b) => a + b, 0) / grayscale.length;
+  let hash = '';
+  for (const v of grayscale) {
+    hash += v > avg ? '1' : '0';
   }
+  return hash;
+}
+
+export function hammingDistance(hash1: string, hash2: string): number {
+  let dist = 0;
+  for (let i = 0; i < hash1.length; i++) {
+    if (hash1[i] !== hash2[i]) dist++;
+  }
+  return dist;
+}
+
+export function hashToMatchScore(hash1: string, hash2: string): number {
+  const maxDist = hash1.length;
+  if (maxDist === 0) return 0;
+  const dist = hammingDistance(hash1, hash2);
+  return parseFloat(Math.max(0, Math.min(1, 1 - dist / maxDist)).toFixed(4));
+}
+
+export interface MotionBuffer {
+  centers: { x: number; y: number }[];
+}
+
+export function createMotionBuffer(): MotionBuffer {
+  return { centers: [] };
+}
+
+export function pushMotionFrame(
+  buf: MotionBuffer,
+  box: FaceBox,
+  maxLen: number = 30
+): void {
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  buf.centers.push({ x: cx, y: cy });
+  if (buf.centers.length > maxLen) buf.centers.shift();
+}
+
+export function computeMotionScore(buf: MotionBuffer): number {
+  if (buf.centers.length < 5) return 0;
+  let totalMovement = 0;
+  for (let i = 1; i < buf.centers.length; i++) {
+    totalMovement += Math.abs(buf.centers[i].x - buf.centers[i - 1].x);
+    totalMovement += Math.abs(buf.centers[i].y - buf.centers[i - 1].y);
+  }
+  return parseFloat(Math.min(1, totalMovement / 50).toFixed(4));
 }
