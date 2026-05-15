@@ -15,7 +15,7 @@ import {
   createMotionBuffer,
   pushMotionFrame,
   computeMotionScore,
-  resetDetection,
+  initFaceDetection,
 } from '@/lib/face';
 
 const STEPS = ['Consent', 'Camera', 'Quality', 'Liveness', 'Complete'];
@@ -59,6 +59,12 @@ export default function EnrollPage() {
     check();
     return () => { stopCamera(); };
   }, [router, supabase]);
+
+  useEffect(() => {
+    if (!loading && !alreadyEnrolled) {
+      initFaceDetection().catch(() => {});
+    }
+  }, [loading, alreadyEnrolled]);
 
   const stopCamera = () => {
     cancelAnimationFrame(animRef.current);

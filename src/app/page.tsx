@@ -10,7 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionPrompt } from '@/components/PermissionPrompt';
 import { OfflineQueueStatus } from '@/components/OfflineQueueStatus';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
-import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut } from 'lucide-react';
+import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut, Loader2 } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import {
   detectFace,
@@ -20,7 +20,7 @@ import {
   createMotionBuffer,
   pushMotionFrame,
   computeMotionScore,
-  resetDetection,
+  initFaceDetection,
 } from '@/lib/face';
 import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
 
@@ -49,6 +49,7 @@ export default function HomePage() {
   const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const [faceMatched, setFaceMatched] = useState(false);
   const [enrolledHash, setEnrolledHash] = useState<string | null>(null);
+  const [mediapipeReady, setMediapipeReady] = useState(false);
   const [lastMatchScore, setLastMatchScore] = useState(0);
   const [autoStatus, setAutoStatus] = useState<'idle' | 'scanning' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -136,11 +137,17 @@ export default function HomePage() {
   }, [supabase]);
 
   useEffect(() => {
-    if (cameraPermission === 'granted' && !loading) {
+    if (!loading) {
+      initFaceDetection().catch(() => {}).finally(() => setMediapipeReady(true));
+    }
+  }, [loading]);
+
+  useEffect(() => {
+    if (cameraPermission === 'granted' && !loading && mediapipeReady) {
       startCamera();
     }
     return () => { stopCamera(); };
-  }, [cameraPermission, loading]);
+  }, [cameraPermission, loading, mediapipeReady]);
 
   const startCamera = async () => {
     try {
@@ -472,6 +479,14 @@ export default function HomePage() {
         {cameraPermission !== 'granted' && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Smartphone className="h-8 w-8 text-muted-foreground" />
+          </div>
+        )}
+        {cameraPermission === 'granted' && !mediapipeReady && (
+          <div className="absolute inset-0 flex items-center justify-center bg-background/80">
+            <div className="text-sm text-muted-foreground flex items-center gap-2">
+              <Loader2 className="h-4 w-4 animate-spin" />
+              Loading face detection engine...
+            </div>
           </div>
         )}
       </div>
