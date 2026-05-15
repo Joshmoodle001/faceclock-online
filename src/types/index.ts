@@ -21,7 +21,7 @@ export interface Profile { user_id: string; organization_id: string; employee_co
 
 export interface Device { id: string; organization_id: string; user_id: string; device_name?: string; device_type?: string; platform?: string; browser?: string; fingerprint_hash?: string; webauthn_credential_id?: string; attestation_level: AttestationLevel; blocked: boolean; last_seen_at?: string; created_at: string; updated_at: string; }
 
-export interface FaceEnrollment { id: string; organization_id: string; user_id: string; model_name: string; model_version: string; quality_score: number; liveness_score: number; status: EnrollmentStatus; active: boolean; reviewed_by?: string; reviewed_at?: string; created_at: string; }
+export interface FaceEnrollment { id: string; organization_id: string; user_id: string; model_name: string; model_version: string; quality_score: number; liveness_score: number; face_descriptor?: number[]; status: EnrollmentStatus; active: boolean; reviewed_by?: string; reviewed_at?: string; created_at: string; }
 
 export interface ClockEvent { id: string; organization_id: string; user_id: string; site_id?: string; geofence_id?: string; device_id?: string; event_type: ClockEventType; occurred_at: string; submitted_at: string; client_event_id: string; latitude?: number; longitude?: number; accuracy_m?: number; within_geofence?: boolean; distance_from_geofence_m?: number; face_match_score?: number; liveness_score?: number; location_risk_score?: number; device_risk_score?: number; final_risk_score?: number; decision: ClockDecision; review_state: ReviewState; review_reason?: string; created_at: string; }
 

@@ -14,6 +14,14 @@ import { ClockResultCard } from '@/components/ClockResultCard';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
 import { Camera, MapPin, WifiOff, AlertCircle, Smartphone } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
+import {
+  detectFace,
+  loadModels,
+  computeMatchScore,
+  descriptorToArray,
+  arrayToDescriptor,
+  LivenessChecker,
+} from '@/lib/face';
 import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
@@ -31,6 +39,7 @@ export default function HomePage() {
   const router = useRouter();
   const supabase = createClient();
   const [loading, setLoading] = useState(true);
+  const [modelsLoading, setModelsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any | null>(null);
   const [userName, setUserName] = useState('');
@@ -44,8 +53,16 @@ export default function HomePage() {
   const [position, setPosition] = useState<GeolocationPosition | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [deviceFingerprint, setDeviceFingerprint] = useState('');
+  const [faceInFrame, setFaceInFrame] = useState(false);
+  const [faceConfidence, setFaceConfidence] = useState(0);
+  const [enrolledDescriptor, setEnrolledDescriptor] = useState<Float32Array | null>(null);
+  const [livenessScore, setLivenessScore] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const livenessRef = useRef<LivenessChecker | null>(null);
+  const animRef = useRef<number>(0);
+  const lastDescriptorRef = useRef<Float32Array | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -83,6 +100,18 @@ export default function HomePage() {
             .maybeSingle();
           if (profile) setUserName(profile.display_name);
 
+          const { data: enrollment } = await supabase
+            .from('face_enrollments')
+            .select('face_descriptor')
+            .eq('user_id', authUser.id)
+            .eq('active', true)
+            .eq('status', 'approved')
+            .maybeSingle();
+
+          if (enrollment?.face_descriptor) {
+            setEnrolledDescriptor(arrayToDescriptor(enrollment.face_descriptor));
+          }
+
           const { data: session } = await supabase
             .from('attendance_sessions')
             .select('*')
@@ -112,6 +141,12 @@ export default function HomePage() {
   }, [supabase]);
 
   useEffect(() => {
+    if (!loading) {
+      loadModels().catch(() => {}).finally(() => setModelsLoading(false));
+    }
+  }, [loading]);
+
+  useEffect(() => {
     if (cameraPermission === 'granted') {
       startCamera();
     }
@@ -122,23 +157,62 @@ export default function HomePage() {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+      startDetectionLoop();
     } catch { /* handled by permission state */ }
   };
 
   const stopCamera = () => {
+    cancelAnimationFrame(animRef.current);
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
     }
   };
 
+  const startDetectionLoop = () => {
+    livenessRef.current = new LivenessChecker();
+    const loop = async () => {
+      const video = videoRef.current;
+      if (!video || !streamRef.current) {
+        animRef.current = requestAnimationFrame(loop);
+        return;
+      }
+      try {
+        const result = await detectFace(video);
+        if (result) {
+          setFaceInFrame(true);
+          setFaceConfidence(result.detection.score);
+          lastDescriptorRef.current = result.descriptor;
+          if (livenessRef.current) {
+            livenessRef.current.feedFrame(result.landmarks);
+          }
+        } else {
+          setFaceInFrame(false);
+          setFaceConfidence(0);
+        }
+      } catch {
+        setFaceInFrame(false);
+        setFaceConfidence(0);
+      }
+      animRef.current = requestAnimationFrame(loop);
+    };
+    animRef.current = requestAnimationFrame(loop);
+  };
+
   const requestCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       streamRef.current = stream;
-      if (videoRef.current) videoRef.current.srcObject = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
       setCameraPermission('granted');
+      startDetectionLoop();
     } catch {
       setCameraPermission('denied');
     }
@@ -157,16 +231,33 @@ export default function HomePage() {
       navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 })
     );
 
-  const captureFrame = (): string | null => {
-    const video = videoRef.current;
-    if (!video) return null;
-    const canvas = document.createElement('canvas');
-    canvas.width = video.videoWidth;
-    canvas.height = video.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return null;
-    ctx.drawImage(video, 0, 0);
-    return canvas.toDataURL('image/jpeg', 0.8);
+  const computeRealScores = async () => {
+    let faceMatchScore = 0;
+    let liveness = 0;
+
+    const currentDesc = lastDescriptorRef.current;
+
+    if (currentDesc && enrolledDescriptor) {
+      faceMatchScore = computeMatchScore(currentDesc, enrolledDescriptor);
+    } else if (!faceInFrame) {
+      faceMatchScore = 0;
+    } else {
+      faceMatchScore = 0.5;
+    }
+
+    if (livenessRef.current) {
+      const result = livenessRef.current.getResult();
+      liveness = result.score;
+    } else {
+      liveness = faceInFrame ? 0.3 : 0;
+    }
+
+    setLivenessScore(liveness);
+
+    return {
+      face_match_score: faceMatchScore,
+      liveness_score: liveness,
+    };
   };
 
   const handleClockAction = async (eventType: ClockEventType) => {
@@ -177,6 +268,8 @@ export default function HomePage() {
     try {
       const { data: { user: authUser } } = await supabase.auth.getUser();
       if (!authUser) { router.push('/login'); return; }
+
+      const scores = await computeRealScores();
 
       let lat: number | undefined;
       let lng: number | undefined;
@@ -191,16 +284,22 @@ export default function HomePage() {
         } catch { /* location unavailable */ }
       }
 
+      if (scores.face_match_score < 0.4 && eventType !== 'break_start' && eventType !== 'break_end') {
+        setError('Face does not match enrolled profile. Please position your face clearly in the camera.');
+        setIsSubmitting(false);
+        return;
+      }
+
       const clientEventId = generateClientId();
       const payload = {
         event_type: eventType,
         occurred_at: new Date().toISOString(),
         client_event_id: clientEventId,
-        latitude: lat,
-        longitude: lng,
-        accuracy_m: accuracy,
-        face_match_score: 0.95,
-        liveness_score: 0.92,
+        latitude: lat ?? 0,
+        longitude: lng ?? 0,
+        accuracy_m: accuracy ?? 0,
+        face_match_score: scores.face_match_score,
+        liveness_score: scores.liveness_score,
         device_fingerprint: deviceFingerprint,
         timestamp: new Date().toISOString(),
       };
@@ -329,6 +428,19 @@ export default function HomePage() {
         )}
       </div>
 
+      {user && cameraPermission === 'granted' && (
+        <div className="flex items-center justify-between px-1 text-xs text-muted-foreground">
+          <span className={`flex items-center gap-1 ${faceInFrame ? 'text-emerald-500' : 'text-amber-500'}`}>
+            <span className={`w-1.5 h-1.5 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+            {faceInFrame ? `Face: ${(faceConfidence * 100).toFixed(0)}%` : 'No face detected'}
+          </span>
+          {enrolledDescriptor && (
+            <span>Enrolled: Yes</span>
+          )}
+          {modelsLoading && <span>Loading models...</span>}
+        </div>
+      )}
+
       {position && <GeofenceStatusCard latitude={position.coords.latitude} longitude={position.coords.longitude} accuracy={position.coords.accuracy} />}
 
       {user ? (
@@ -336,7 +448,7 @@ export default function HomePage() {
           <ClockActionButton
             isClockedIn={!!currentSession}
             onClick={(type) => handleClockAction(type)}
-            disabled={isSubmitting || cameraPermission !== 'granted'}
+            disabled={isSubmitting || cameraPermission !== 'granted' || modelsLoading}
             loading={isSubmitting}
           />
           {currentSession && !isSubmitting && (
