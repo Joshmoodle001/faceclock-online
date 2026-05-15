@@ -43,7 +43,21 @@ export interface RiskScores { location_risk_score: number; device_risk_score: nu
 
 export interface GeofenceResult { within: boolean; distance_m: number; risk_level: LocationRiskLevel; }
 
-export interface DeviceInfo { fingerprint: string; platform?: string; browser?: string; device_type?: string; webauthn_credential_id?: string; attestation_level: AttestationLevel; }
+export interface GeofenceAssignment {
+  id: string;
+  geofence_id: string;
+  user_id: string;
+  created_at: string;
+}
+
+export interface DeviceInfo {
+  fingerprint: string;
+  platform?: string;
+  browser?: string;
+  device_type?: string;
+  webauthn_credential_id?: string;
+  attestation_level: AttestationLevel;
+}
 
 export const tables = {
   organizations: 'organizations',
@@ -57,6 +71,7 @@ export const tables = {
   payroll_runs: 'payroll_runs',
   payroll_lines: 'payroll_lines',
   audit_logs: 'audit_logs',
+  geofence_assignments: 'geofence_assignments',
 } as const;
 
 export type Tables = keyof typeof tables;
