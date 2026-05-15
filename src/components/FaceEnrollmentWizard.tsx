@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -48,12 +48,18 @@ export function FaceEnrollmentWizard({ onComplete, onCancel, onSubmit }: FaceEnr
       const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user', width: { ideal: 640 }, height: { ideal: 480 } } });
       streamRef.current = s;
       setCameraPermission(true);
-      if (videoRef.current) videoRef.current.srcObject = s;
       setStep(2);
     } catch {
       setCameraPermission(false);
     }
   };
+
+  useEffect(() => {
+    if (step === 2 && streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [step]);
 
   const captureFrames = () => {
     setCapturing(true);

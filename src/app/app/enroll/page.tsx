@@ -73,11 +73,17 @@ export default function EnrollPage() {
       streamRef.current = s;
       setStream(s);
       setCameraPermission(true);
-      if (videoRef.current) videoRef.current.srcObject = s;
     } catch {
       setCameraPermission(false);
     }
   };
+
+  useEffect(() => {
+    if (streamRef.current && videoRef.current) {
+      videoRef.current.srcObject = streamRef.current;
+      videoRef.current.play().catch(() => {});
+    }
+  }, [cameraPermission, step]);
 
   const captureFrames = () => {
     setCapturing(true);

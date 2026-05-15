@@ -11,7 +11,7 @@ import {
   DropdownMenuSeparator, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { Skeleton } from '@/components/ui/skeleton';
-import { Clock, History, User, LogOut, Settings, Moon, Sun } from 'lucide-react';
+import { Clock, History, User, LogOut, Settings, Moon, Sun, Shield } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import type { Profile } from '@/types';
 
@@ -33,11 +33,12 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
+      if (error) { router.push('/login'); return; }
       if (data) setProfile(data as Profile);
       setLoading(false);
     };
@@ -112,6 +113,14 @@ export default function AppLayout({ children }: { children: React.ReactNode }) {
                 {theme === 'dark' ? <Sun className="h-4 w-4 mr-2" /> : <Moon className="h-4 w-4 mr-2" />}
                 {theme === 'dark' ? 'Light Mode' : 'Dark Mode'}
               </DropdownMenuItem>
+              {(profile?.role === 'super_admin' || profile?.role === 'org_admin' || profile?.role === 'manager') && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={() => router.push('/admin/dashboard')}>
+                    <Shield className="h-4 w-4 mr-2" /> Admin Console
+                  </DropdownMenuItem>
+                </>
+              )}
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleSignOut} className="text-destructive">
                 <LogOut className="h-4 w-4 mr-2" /> Sign Out

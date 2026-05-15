@@ -58,11 +58,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) { router.push('/login'); return; }
-      const { data } = await supabase
+      const { data, error } = await supabase
         .from('profiles')
         .select('*')
         .eq('user_id', user.id)
-        .single();
+        .maybeSingle();
+      if (error) { router.push('/login'); return; }
       if (data) {
         setProfile(data as Profile);
         if (data.role === 'employee') { router.push('/app/clock'); return; }

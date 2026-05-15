@@ -45,13 +45,15 @@ export default function LoginPage() {
   const redirectByRole = async () => {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) { router.push('/login'); return; }
-    const { data: profile } = await supabase
+    const { data: profile, error } = await supabase
       .from('profiles')
       .select('role')
       .eq('user_id', user.id)
-      .single();
+      .maybeSingle();
     if (profile?.role === 'employee') router.push('/app/clock');
-    else router.push('/admin/dashboard');
+    else if (profile?.role === 'super_admin' || profile?.role === 'org_admin' || profile?.role === 'manager') router.push('/admin/dashboard');
+    else if (profile?.role) router.push('/admin/dashboard');
+    else router.push('/app/clock');
   };
 
   const signInWithGoogle = async () => {
