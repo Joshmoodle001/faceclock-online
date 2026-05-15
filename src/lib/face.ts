@@ -12,6 +12,14 @@ export interface FaceResult {
 
 let prevFrame: ImageData | null = null;
 let lastBox: FaceBox | null = null;
+let lastFaceTime = 0;
+let boxStableCount = 0;
+
+const FACE_TIMEOUT_MS = 2000;
+const MIN_FACE_SIZE = 30;
+const MOTION_THRESHOLD = 25;
+const MOTION_RATIO_MIN = 0.003;
+const SKIN_RATIO_MIN = 0.015;
 
 export function isFaceDetectorSupported(): boolean {
   return true;
@@ -20,135 +28,44 @@ export function isFaceDetectorSupported(): boolean {
 export function resetDetection(): void {
   prevFrame = null;
   lastBox = null;
+  lastFaceTime = 0;
+  boxStableCount = 0;
 }
 
-function skinColorScore(r: number, g: number, b: number): number {
-  let score = 0;
-  if (r > 80 && g > 30 && b > 15) score += 0.3;
-  if (r > g && r > b) score += 0.3;
-  if (Math.abs(r - g) > 12) score += 0.2;
-  if (r > 100 && g < 240 && b < 240) score += 0.2;
-  return score;
+function luminosity(r: number, g: number, b: number): number {
+  return 0.299 * r + 0.587 * g + 0.114 * b;
 }
 
-function findSkinRegion(
-  imageData: ImageData,
-  motionMask: Uint8Array | null
-): FaceBox | null {
-  const w = imageData.width;
-  const h = imageData.height;
-  const pixels = imageData.data;
-  const skinScore = new Float32Array(w * h);
-  let maxScore = 0;
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = (y * w + x);
-      const pi = idx * 4;
-      const r = pixels[pi], g = pixels[pi + 1], b = pixels[pi + 2];
-
-      if (motionMask && motionMask[idx] === 0) {
-        skinScore[idx] = 0;
-        continue;
-      }
-
-      const score = skinColorScore(r, g, b);
-      skinScore[idx] = score;
-      if (score > maxScore) maxScore = score;
-    }
-  }
-
-  if (maxScore < 0.4) return fallbackCenterDetection(imageData);
-
-  const threshold = maxScore * 0.6;
-  let minX = w, minY = h, maxX = 0, maxY = 0;
-  let count = 0;
-
-  const verticalProfile = new Float32Array(h);
-  const horizontalProfile = new Float32Array(w);
-
-  for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      if (skinScore[y * w + x] >= threshold) {
-        verticalProfile[y]++;
-        horizontalProfile[x]++;
-        count++;
-      }
-    }
-  }
-
-  if (count < w * h * 0.005) return fallbackCenterDetection(imageData);
-
-  const vAvg = verticalProfile.reduce((a, b) => a + b, 0) / h;
-  const hAvg = horizontalProfile.reduce((a, b) => a + b, 0) / w;
-
-  for (let y = 0; y < h; y++) {
-    if (verticalProfile[y] > vAvg * 0.5) {
-      minY = Math.min(minY, y);
-      maxY = Math.max(maxY, y);
-    }
-  }
-  for (let x = 0; x < w; x++) {
-    if (horizontalProfile[x] > hAvg * 0.5) {
-      minX = Math.min(minX, x);
-      maxX = Math.max(maxX, x);
-    }
-  }
-
-  const bw = maxX - minX;
-  const bh = maxY - minY;
-
-  if (bw < 20 || bh < 20 || bh > h * 0.8 || bw > w * 0.8) {
-    return fallbackCenterDetection(imageData);
-  }
-
-  const aspectRatio = bw / bh;
-  if (aspectRatio < 0.3 || aspectRatio > 1.8) {
-    return fallbackCenterDetection(imageData);
-  }
-
-  return { x: minX, y: minY, width: bw, height: bh };
+function isSkinColor(r: number, g: number, b: number): boolean {
+  if (r < 50 || g < 30 || b < 15) return false;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  if (max - min < 10) return false;
+  if (r < g || r < b) return false;
+  return true;
 }
 
-function fallbackCenterDetection(imageData: ImageData): FaceBox | null {
-  const w = imageData.width;
-  const h = imageData.height;
-  const size = Math.min(w, h) * 0.4;
-  const cx = w / 2;
-  const cy = h * 0.4;
-  return {
-    x: Math.max(0, cx - size / 2),
-    y: Math.max(0, cy - size / 2),
-    width: size,
-    height: size * 1.2,
-  };
-}
-
-function computeMotionMask(
-  current: ImageData,
-  threshold: number = 25
-): Uint8Array | null {
+function computeMotionPixels(current: ImageData): number {
   if (!prevFrame) {
     prevFrame = new ImageData(
       new Uint8ClampedArray(current.data),
       current.width,
       current.height
     );
-    return null;
+    return -1;
   }
 
   const w = current.width;
   const h = current.height;
-  const mask = new Uint8Array(w * h);
-  let changedPixels = 0;
+  let count = 0;
 
   for (let i = 0; i < w * h; i++) {
     const pi = i * 4;
-    const cd = Math.abs(current.data[pi] - prevFrame.data[pi]) +
-               Math.abs(current.data[pi + 1] - prevFrame.data[pi + 1]) +
-               Math.abs(current.data[pi + 2] - prevFrame.data[pi + 2]);
-    mask[i] = cd > threshold ? 255 : 0;
-    if (mask[i] > 0) changedPixels++;
+    const d = 
+      Math.abs(current.data[pi] - prevFrame.data[pi]) +
+      Math.abs(current.data[pi + 1] - prevFrame.data[pi + 1]) +
+      Math.abs(current.data[pi + 2] - prevFrame.data[pi + 2]);
+    if (d > MOTION_THRESHOLD) count++;
   }
 
   prevFrame = new ImageData(
@@ -157,22 +74,111 @@ function computeMotionMask(
     current.height
   );
 
-  if (changedPixels < w * h * 0.002) return null;
-  return mask;
+  return count;
+}
+
+function countSkinPixels(imageData: ImageData, region?: FaceBox): number {
+  const w = imageData.width;
+  const h = imageData.height;
+  const pixels = imageData.data;
+  let count = 0;
+  let total = 0;
+
+  const x1 = region ? Math.max(0, Math.floor(region.x)) : 0;
+  const y1 = region ? Math.max(0, Math.floor(region.y)) : 0;
+  const x2 = region ? Math.min(w, Math.ceil(region.x + region.width)) : w;
+  const y2 = region ? Math.min(h, Math.ceil(region.y + region.height)) : h;
+
+  for (let y = y1; y < y2; y++) {
+    for (let x = x1; x < x2; x++) {
+      const pi = (y * w + x) * 4;
+      if (isSkinColor(pixels[pi], pixels[pi + 1], pixels[pi + 2])) count++;
+      total++;
+    }
+  }
+
+  return total > 0 ? count : 0;
+}
+
+function findFaceBox(
+  imageData: ImageData,
+  motionCount: number
+): FaceBox | null {
+  const w = imageData.width;
+  const h = imageData.height;
+  const totalPixels = w * h;
+  const motionRatio = motionCount / totalPixels;
+  const skinCount = countSkinPixels(imageData);
+  const skinRatio = skinCount / totalPixels;
+
+  const hasMotion = motionCount >= 0 && motionRatio >= MOTION_RATIO_MIN;
+  const hasSkin = skinRatio >= SKIN_RATIO_MIN;
+
+  if (!hasSkin) return null;
+
+  if (hasMotion) {
+    const pixels = imageData.data;
+    const skinAndMotion = new Uint8Array(totalPixels);
+
+    for (let i = 0; i < totalPixels; i++) {
+      const pi = i * 4;
+      if (isSkinColor(pixels[pi], pixels[pi + 1], pixels[pi + 2])) {
+        skinAndMotion[i] = 1;
+      }
+    }
+
+    let minX = w, minY = h, maxX = 0, maxY = 0;
+    let found = false;
+
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (skinAndMotion[y * w + x]) {
+          minX = Math.min(minX, x);
+          maxX = Math.max(maxX, x);
+          minY = Math.min(minY, y);
+          maxY = Math.max(maxY, y);
+          found = true;
+        }
+      }
+    }
+
+    if (!found) return null;
+
+    const bw = maxX - minX;
+    const bh = maxY - minY;
+
+    if (bw < MIN_FACE_SIZE || bh < MIN_FACE_SIZE) return null;
+    if (bw > w * 0.85 || bh > h * 0.85) return null;
+
+    const aspect = bw / bh;
+    if (aspect < 0.3 || aspect > 2.0) return null;
+
+    return { x: minX, y: minY, width: bw, height: bh };
+  }
+
+  if (lastBox) {
+    const centerSkin = countSkinPixels(imageData, lastBox);
+    const centerTotal = lastBox.width * lastBox.height;
+    if (centerTotal > 0 && centerSkin / centerTotal > 0.1) {
+      return { ...lastBox };
+    }
+  }
+
+  return null;
 }
 
 function smoothBox(
   newBox: FaceBox | null,
-  oldBox: FaceBox | null,
-  factor: number = 0.6
+  old: FaceBox | null,
+  factor: number = 0.5
 ): FaceBox | null {
-  if (!newBox) return oldBox;
-  if (!oldBox) return newBox;
+  if (!newBox) return null;
+  if (!old) return newBox;
   return {
-    x: oldBox.x + (newBox.x - oldBox.x) * factor,
-    y: oldBox.y + (newBox.y - oldBox.y) * factor,
-    width: oldBox.width + (newBox.width - oldBox.width) * factor,
-    height: oldBox.height + (newBox.height - oldBox.height) * factor,
+    x: old.x + (newBox.x - old.x) * factor,
+    y: old.y + (newBox.y - old.y) * factor,
+    width: old.width + (newBox.width - old.width) * factor,
+    height: old.height + (newBox.height - old.height) * factor,
   };
 }
 
@@ -191,21 +197,28 @@ export async function detectFace(
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
 
-    const motionMask = computeMotionMask(imageData);
-    const box = findSkinRegion(imageData, motionMask);
+    const motionCount = computeMotionPixels(imageData);
+    const faceBox = findFaceBox(imageData, motionCount);
 
-    if (box && (box.width < 20 || box.height < 20)) return null;
+    const now = Date.now();
 
-    const smoothed = smoothBox(box, lastBox);
-    lastBox = smoothed;
+    if (faceBox) {
+      lastFaceTime = now;
+      lastBox = smoothBox(faceBox, lastBox);
+      boxStableCount++;
+      const conf = Math.min(0.95, 0.5 + boxStableCount * 0.02);
+      return { box: lastBox!, confidence: parseFloat(conf.toFixed(3)) };
+    }
 
-    if (!smoothed) return null;
+    if (lastBox && now - lastFaceTime < FACE_TIMEOUT_MS) {
+      const elapsed = now - lastFaceTime;
+      const conf = Math.max(0.1, 0.5 * (1 - elapsed / FACE_TIMEOUT_MS));
+      return { box: lastBox, confidence: parseFloat(conf.toFixed(3)) };
+    }
 
-    const area = smoothed.width * smoothed.height;
-    const frameArea = canvas.width * canvas.height;
-    const confidence = Math.min(1, (area / frameArea) * 15);
-
-    return { box: smoothed, confidence: parseFloat(confidence.toFixed(3)) };
+    lastBox = null;
+    boxStableCount = 0;
+    return null;
   } catch {
     return null;
   }
@@ -238,22 +251,20 @@ export function computeAverageHash(imageData: ImageData): string {
   const pixels = imageData.data;
   const w = imageData.width;
   const h = imageData.height;
-  const grayscale: number[] = [];
+  const gray: number[] = [];
 
   for (let y = 0; y < h; y++) {
     for (let x = 0; x < w; x++) {
       const idx = (y * w + x) * 4;
-      grayscale.push(
+      gray.push(
         0.299 * pixels[idx] + 0.587 * pixels[idx + 1] + 0.114 * pixels[idx + 2]
       );
     }
   }
 
-  const avg = grayscale.reduce((a, b) => a + b, 0) / grayscale.length;
+  const avg = gray.reduce((a, b) => a + b, 0) / gray.length;
   let hash = '';
-  for (const v of grayscale) {
-    hash += v > avg ? '1' : '0';
-  }
+  for (const v of gray) hash += v > avg ? '1' : '0';
   return hash;
 }
 
@@ -293,10 +304,10 @@ export function pushMotionFrame(
 
 export function computeMotionScore(buf: MotionBuffer): number {
   if (buf.centers.length < 5) return 0;
-  let totalMovement = 0;
+  let total = 0;
   for (let i = 1; i < buf.centers.length; i++) {
-    totalMovement += Math.abs(buf.centers[i].x - buf.centers[i - 1].x);
-    totalMovement += Math.abs(buf.centers[i].y - buf.centers[i - 1].y);
+    total += Math.abs(buf.centers[i].x - buf.centers[i - 1].x);
+    total += Math.abs(buf.centers[i].y - buf.centers[i - 1].y);
   }
-  return parseFloat(Math.min(1, totalMovement / 50).toFixed(4));
+  return parseFloat(Math.min(1, total / 50).toFixed(4));
 }
