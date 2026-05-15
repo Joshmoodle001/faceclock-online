@@ -112,48 +112,68 @@ export function LocationMapPicker({
   }, [onLocationChange, showRadius, radius, drawCircle]);
 
   useEffect(() => {
-    if (!containerRef.current || mapRef.current) return;
-    const map = new maplibregl.Map({
-      container: containerRef.current,
-      style: 'https://tiles.openfreemap.org/styles/liberty',
-      center: [longitude || 28.0473, latitude || -26.2041],
-      zoom: 13,
-    });
-    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    const el = containerRef.current;
+    if (!el || mapRef.current) return;
 
-    const marker = new maplibregl.Marker({ draggable: true, color: '#ef4444' })
-      .setLngLat([longitude || 28.0473, latitude || -26.2041])
-      .addTo(map);
+    const init = () => {
+      if (el.clientWidth === 0 || el.clientHeight === 0) return;
+      observer?.disconnect();
+      try {
+        const map = new maplibregl.Map({
+          container: el,
+          style: 'https://tiles.openfreemap.org/styles/liberty',
+          center: [longitude || 28.0473, latitude || -26.2041],
+          zoom: 13,
+        });
+        map.addControl(new maplibregl.NavigationControl(), 'top-right');
+        map.on('error', (e) => console.warn('Map error:', e));
 
-    marker.on('dragend', () => {
-      const lngLat = marker.getLngLat();
-      onLocationChange(lngLat.lat, lngLat.lng);
-      if (showRadius) {
-        drawCircle(map, lngLat.lat, lngLat.lng, radiusRef.current);
+        const marker = new maplibregl.Marker({ draggable: true, color: '#ef4444' })
+          .setLngLat([longitude || 28.0473, latitude || -26.2041])
+          .addTo(map);
+
+        marker.on('dragend', () => {
+          const lngLat = marker.getLngLat();
+          onLocationChange(lngLat.lat, lngLat.lng);
+          if (showRadius) {
+            drawCircle(map, lngLat.lat, lngLat.lng, radiusRef.current);
+          }
+        });
+
+        map.on('click', (e) => {
+          marker.setLngLat(e.lngLat);
+          onLocationChange(e.lngLat.lat, e.lngLat.lng);
+          if (showRadius) {
+            drawCircle(map, e.lngLat.lat, e.lngLat.lng, radiusRef.current);
+          }
+        });
+
+        map.on('load', () => {
+          if (showRadius && latitude && longitude) {
+            drawCircle(map, latitude, longitude, radius);
+          }
+        });
+
+        mapRef.current = map;
+        markerRef.current = marker;
+      } catch (err) {
+        console.warn('Map init failed, retrying...', err);
+        observer = new ResizeObserver(init);
+        observer.observe(el);
       }
-    });
+    };
 
-    map.on('click', (e) => {
-      marker.setLngLat(e.lngLat);
-      onLocationChange(e.lngLat.lat, e.lngLat.lng);
-      if (showRadius) {
-        drawCircle(map, e.lngLat.lat, e.lngLat.lng, radiusRef.current);
-      }
-    });
-
-    map.on('load', () => {
-      if (showRadius && latitude && longitude) {
-        drawCircle(map, latitude, longitude, radius);
-      }
-    });
-
-    mapRef.current = map;
-    markerRef.current = marker;
+    let observer = new ResizeObserver(init);
+    observer.observe(el);
+    init();
 
     return () => {
-      map.remove();
-      mapRef.current = null;
-      markerRef.current = null;
+      observer?.disconnect();
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+        markerRef.current = null;
+      }
     };
   }, []);
 
