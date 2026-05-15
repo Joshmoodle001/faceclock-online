@@ -13,7 +13,6 @@ import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
 import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import {
-  isFaceDetectorSupported,
   detectFace,
   captureFaceRegion,
   computeAverageHash,
@@ -21,6 +20,7 @@ import {
   createMotionBuffer,
   pushMotionFrame,
   computeMotionScore,
+  resetDetection,
 } from '@/lib/face';
 import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
 
@@ -51,7 +51,6 @@ export default function HomePage() {
   const [enrolledHash, setEnrolledHash] = useState<string | null>(null);
   const [lastMatchScore, setLastMatchScore] = useState(0);
   const [autoStatus, setAutoStatus] = useState<'idle' | 'scanning' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
-  const [browserSupported, setBrowserSupported] = useState(true);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -66,7 +65,6 @@ export default function HomePage() {
   }, []);
 
   useEffect(() => {
-    setBrowserSupported(isFaceDetectorSupported());
     const handleOnline = () => setOnline(true);
     const handleOffline = () => setOnline(false);
     window.addEventListener('online', handleOnline);
@@ -388,25 +386,6 @@ export default function HomePage() {
           <Skeleton className="h-48 w-full" />
           <Skeleton className="h-12 w-full" />
         </div>
-      </div>
-    );
-  }
-
-  if (!browserSupported) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4 max-w-lg mx-auto">
-        <Card className="w-full">
-          <CardContent className="pt-6 text-center space-y-4">
-            <AlertCircle className="h-12 w-12 mx-auto text-destructive" />
-            <p className="text-lg font-medium">Browser Not Supported</p>
-            <p className="text-sm text-muted-foreground">
-              Face detection requires Chrome, Edge, or Opera. Please switch to a supported browser.
-            </p>
-            <Button variant="outline" asChild>
-              <Link href="/login">Admin Login</Link>
-            </Button>
-          </CardContent>
-        </Card>
       </div>
     );
   }

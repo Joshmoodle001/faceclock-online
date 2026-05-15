@@ -9,13 +9,13 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionPrompt } from '@/components/PermissionPrompt';
 import { Check, Loader2, Camera, Shield, AlertCircle, CheckCircle2, XCircle } from 'lucide-react';
 import {
-  isFaceDetectorSupported,
   detectFace,
   captureFaceRegion,
   computeAverageHash,
   createMotionBuffer,
   pushMotionFrame,
   computeMotionScore,
+  resetDetection,
 } from '@/lib/face';
 
 const STEPS = ['Consent', 'Camera', 'Quality', 'Liveness', 'Complete'];
@@ -232,22 +232,6 @@ export default function EnrollPage() {
       setSubmitting(false);
     }
   };
-
-  if (!isFaceDetectorSupported() && !loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center p-4">
-        <Card className="w-full max-w-md">
-          <CardContent className="pt-6 text-center space-y-4">
-            <XCircle className="h-12 w-12 mx-auto text-destructive" />
-            <p className="text-lg font-medium">Browser Not Supported</p>
-            <p className="text-sm text-muted-foreground">
-              Face detection requires Chrome or Edge. Please use a supported browser.
-            </p>
-          </CardContent>
-        </Card>
-      </div>
-    );
-  }
 
   if (loading) {
     return (
