@@ -19,6 +19,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
+import { ScrollArea } from '@/components/ui/scroll-area';
 import { Plus, Search, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import type { Organization } from '@/types';
 import { toast } from 'sonner';
@@ -157,12 +158,13 @@ export default function OrganizationsPage() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{editing ? 'Edit Organization' : 'Create Organization'}</DialogTitle>
-            <DialogDescription>{editing ? 'Update organization details' : 'Create a new organization and its main admin account'}</DialogDescription>
-          </DialogHeader>
-          <div className="space-y-4">
+          <DialogContent className="max-h-[85vh]">
+            <DialogHeader>
+              <DialogTitle>{editing ? 'Edit Organization' : 'Create Organization'}</DialogTitle>
+              <DialogDescription>{editing ? 'Update organization details' : 'Create a new organization and its main admin account'}</DialogDescription>
+            </DialogHeader>
+            <ScrollArea className="max-h-[60vh] pr-4">
+            <div className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Organization Name</Label>
               <Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value, slug: editing ? form.slug : e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) })} />
@@ -228,8 +230,9 @@ export default function OrganizationsPage() {
                 </div>
               </>
             )}
-          </div>
-          <DialogFooter>
+            </div>
+            </ScrollArea>
+            <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving || !form.name}>
               {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : editing ? 'Update' : 'Create'}
