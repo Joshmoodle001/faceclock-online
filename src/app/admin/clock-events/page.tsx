@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -17,7 +18,7 @@ import {
 } from '@/components/ui/select';
 import { Drawer, DrawerContent, DrawerHeader, DrawerTitle, DrawerTrigger } from '@/components/ui/drawer';
 import { RiskScoreBadge } from '@/components/RiskScoreBadge';
-import { Search, Filter, Clock, AlertCircle } from 'lucide-react';
+import { Search, Filter, Clock, AlertCircle, ArrowLeft } from 'lucide-react';
 import { formatTimestamp, parseWktPoint } from '@/lib/utils';
 import type { ClockEvent } from '@/types';
 
@@ -32,19 +33,34 @@ const decisionColor = (d: string) => {
 
 export default function ClockEventsPage() {
   const supabase = createClient();
+  const searchParams = useSearchParams();
   const [events, setEvents] = useState<ClockEvent[]>([]);
   const [loading, setLoading] = useState(true);
+  const [orgId, setOrgId] = useState<string | null>(null);
   const [search, setSearch] = useState('');
   const [eventTypeFilter, setEventTypeFilter] = useState('all');
   const [decisionFilter, setDecisionFilter] = useState('all');
+  const [userIdFilter, setUserIdFilter] = useState(searchParams.get('user_id') || '');
   const [selectedEvent, setSelectedEvent] = useState<ClockEvent | null>(null);
 
-  useEffect(() => { loadEvents(); }, [search, eventTypeFilter, decisionFilter]);
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
+      if (prof) setOrgId(prof.organization_id);
+    };
+    init();
+  }, []);
+
+  useEffect(() => { if (orgId) loadEvents(); }, [orgId, search, eventTypeFilter, decisionFilter, userIdFilter]);
 
   const loadEvents = async () => {
-    let query = supabase.from('clock_events').select('*, profiles(display_name), location_geog').order('occurred_at', { ascending: false }).limit(100);
+    if (!orgId) return;
+    let query = supabase.from('clock_events').select('*, profiles(display_name), location_geog').eq('organization_id', orgId).order('occurred_at', { ascending: false }).limit(100);
     if (eventTypeFilter !== 'all') query = query.eq('event_type', eventTypeFilter);
     if (decisionFilter !== 'all') query = query.eq('decision', decisionFilter);
+    if (userIdFilter) query = query.eq('user_id', userIdFilter);
     const { data } = await query;
     setEvents((data || []).map((e) => {
       const coords = (e as unknown as { location_geog?: string }).location_geog ? parseWktPoint((e as unknown as { location_geog?: string }).location_geog!) : null;
@@ -57,6 +73,11 @@ export default function ClockEventsPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Clock Events</h1>
+        {userIdFilter && (
+          <Button variant="outline" size="sm" onClick={() => { setUserIdFilter(''); window.history.replaceState({}, '', '/admin/clock-events'); }}>
+            <ArrowLeft className="h-4 w-4 mr-2" /> Back to All
+          </Button>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-4">

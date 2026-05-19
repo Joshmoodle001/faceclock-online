@@ -36,7 +36,7 @@ export async function middleware(request: NextRequest) {
 
   const path = request.nextUrl.pathname;
 
-  const publicPaths = ["/login", "/privacy", "/terms", "/"];
+  const publicPaths = ["/login", "/signup", "/privacy", "/terms", "/"];
   const isPublic = publicPaths.some(
     (p) => path === p || path.startsWith("/_next") || path.startsWith("/api")
   );
@@ -50,12 +50,6 @@ export async function middleware(request: NextRequest) {
   if (user && path === "/login") {
     const url = request.nextUrl.clone();
     url.pathname = "/app";
-    return NextResponse.redirect(url);
-  }
-
-  if (path === "/app/clock") {
-    const url = request.nextUrl.clone();
-    url.pathname = "/";
     return NextResponse.redirect(url);
   }
 

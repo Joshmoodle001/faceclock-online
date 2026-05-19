@@ -122,7 +122,10 @@ export default function LoginPage() {
           </Button>
         </CardContent>
         <CardFooter className="justify-center text-sm text-muted-foreground">
-          By signing in, you agree to our <a href="/terms" className="underline hover:text-foreground">Terms</a> and <a href="/privacy" className="underline hover:text-foreground ml-1">Privacy Policy</a>
+          <div className="text-center space-y-1">
+            <p>By signing in, you agree to our <a href="/terms" className="underline hover:text-foreground">Terms</a> and <a href="/privacy" className="underline hover:text-foreground ml-1">Privacy Policy</a></p>
+            <p>Don&apos;t have an account? <a href="/signup" className="underline hover:text-foreground font-medium">Create your organization</a></p>
+          </div>
         </CardFooter>
       </Card>
     </div>

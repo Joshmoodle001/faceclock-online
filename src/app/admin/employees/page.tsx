@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import Link from 'next/link';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import {
@@ -22,7 +23,7 @@ import {
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Plus, Search, MoreHorizontal, UserCog, AlertCircle } from 'lucide-react';
+import { Plus, Search, MoreHorizontal, UserCog, AlertCircle, Clock } from 'lucide-react';
 import type { Profile } from '@/types';
 import { toast } from 'sonner';
 
@@ -50,10 +51,11 @@ export default function EmployeesPage() {
     init();
   }, []);
 
-  useEffect(() => { loadEmployees(); }, [search]);
+  useEffect(() => { if (orgId) loadEmployees(); }, [orgId, search]);
 
   const loadEmployees = async () => {
-    let query = supabase.from('profiles').select('*').order('display_name');
+    if (!orgId) return;
+    let query = supabase.from('profiles').select('*').eq('organization_id', orgId).order('display_name');
     if (search) query = query.ilike('display_name', `%${search}%`);
     const { data } = await query;
     setEmployees(data as Profile[] || []);
@@ -147,11 +149,17 @@ export default function EmployeesPage() {
                   <TableCell><Badge variant="outline">{emp.role}</Badge></TableCell>
                   <TableCell><Badge variant={emp.employment_status === 'active' ? 'success' : emp.employment_status === 'suspended' ? 'warning' : 'secondary'}>{emp.employment_status}</Badge></TableCell>
                   <TableCell>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
+                    <div className="flex items-center gap-1">
+                      <Button variant="ghost" size="icon" asChild>
+                        <Link href={`/admin/clock-events?user_id=${emp.user_id}`}>
+                          <Clock className="h-4 w-4" />
+                        </Link>
+                      </Button>
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button variant="ghost" size="icon"><MoreHorizontal className="h-4 w-4" /></Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end">
                         <DropdownMenuItem onClick={() => { setEditing(emp); setForm({ display_name: emp.display_name, email: emp.email, phone: emp.phone || '', employee_code: emp.employee_code || '', role: emp.role }); setDialogOpen(true); }}>
                           Edit
                         </DropdownMenuItem>
@@ -160,6 +168,7 @@ export default function EmployeesPage() {
                         <DropdownMenuItem onClick={() => updateStatus(emp.user_id, 'terminated')}>Terminate</DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}
