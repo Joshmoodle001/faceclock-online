@@ -8,9 +8,10 @@ import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Separator } from '@/components/ui/separator';
 import {
   Dialog, DialogContent, DialogDescription, DialogFooter,
-  DialogHeader, DialogTitle, DialogTrigger,
+  DialogHeader, DialogTitle,
 } from '@/components/ui/dialog';
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -18,7 +19,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from '@/components/ui/select';
-import { Plus, Search, Pencil, Trash2, AlertCircle } from 'lucide-react';
+import { Plus, Search, Pencil, Trash2, AlertCircle, Loader2 } from 'lucide-react';
 import type { Organization } from '@/types';
 import { toast } from 'sonner';
 
@@ -30,6 +31,7 @@ export default function OrganizationsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Organization | null>(null);
   const [form, setForm] = useState({ name: '', slug: '', default_timezone: 'Africa/Johannesburg', currency: 'ZAR', status: 'active' });
+  const [adminForm, setAdminForm] = useState({ email: '', displayName: '', password: '' });
   const [saving, setSaving] = useState(false);
 
   useEffect(() => { loadOrgs(); }, [search]);
@@ -45,29 +47,55 @@ export default function OrganizationsPage() {
   const openCreate = () => {
     setEditing(null);
     setForm({ name: '', slug: '', default_timezone: 'Africa/Johannesburg', currency: 'ZAR', status: 'active' });
+    setAdminForm({ email: '', displayName: '', password: '' });
     setDialogOpen(true);
   };
 
   const openEdit = (org: Organization) => {
     setEditing(org);
     setForm({ name: org.name, slug: org.slug, default_timezone: org.default_timezone, currency: org.currency, status: org.status });
+    setAdminForm({ email: '', displayName: '', password: '' });
     setDialogOpen(true);
   };
 
   const handleSave = async () => {
     setSaving(true);
-    if (editing) {
-      const { error } = await supabase.from('organizations').update(form).eq('id', editing.id);
-      if (error) { toast.error('Update failed'); setSaving(false); return; }
-      toast.success('Organization updated');
-    } else {
-      const { error } = await supabase.from('organizations').insert(form);
-      if (error) { toast.error('Create failed'); setSaving(false); return; }
-      toast.success('Organization created');
+    try {
+      if (editing) {
+        const { error } = await supabase.from('organizations').update(form).eq('id', editing.id);
+        if (error) throw new Error(error.message);
+        toast.success('Organization updated');
+      } else {
+        const slug = form.slug || form.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50);
+        if (!adminForm.email || !adminForm.displayName || !adminForm.password) {
+          toast.error('Admin email, name, and password are required');
+          setSaving(false);
+          return;
+        }
+        const res = await fetch('/api/register', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            orgName: form.name,
+            slug,
+            default_timezone: form.default_timezone,
+            currency: form.currency,
+            email: adminForm.email,
+            password: adminForm.password,
+            displayName: adminForm.displayName,
+          }),
+        });
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || 'Failed to create organization');
+        toast.success('Organization and admin account created');
+      }
+      setDialogOpen(false);
+      loadOrgs();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Operation failed');
+    } finally {
+      setSaving(false);
     }
-    setDialogOpen(false);
-    setSaving(false);
-    loadOrgs();
   };
 
   const handleDelete = async (id: string) => {
@@ -132,12 +160,12 @@ export default function OrganizationsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit Organization' : 'Create Organization'}</DialogTitle>
-            <DialogDescription>{editing ? 'Update organization details' : 'Add a new organization'}</DialogDescription>
+            <DialogDescription>{editing ? 'Update organization details' : 'Create a new organization and its main admin account'}</DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="name">Name</Label>
-              <Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+              <Label htmlFor="name">Organization Name</Label>
+              <Input id="name" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value, slug: editing ? form.slug : e.target.value.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50) })} />
             </div>
             <div className="space-y-2">
               <Label htmlFor="slug">Slug</Label>
@@ -180,11 +208,31 @@ export default function OrganizationsPage() {
                 </SelectContent>
               </Select>
             </div>
+
+            {!editing && (
+              <>
+                <Separator />
+                <p className="text-sm font-medium">Main Admin Account</p>
+                <p className="text-xs text-muted-foreground -mt-3">This account will be the org_admin for this organization.</p>
+                <div className="space-y-2">
+                  <Label htmlFor="adminName">Admin Name</Label>
+                  <Input id="adminName" placeholder="John Doe" value={adminForm.displayName} onChange={(e) => setAdminForm({ ...adminForm, displayName: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="adminEmail">Admin Email</Label>
+                  <Input id="adminEmail" type="email" placeholder="admin@company.com" value={adminForm.email} onChange={(e) => setAdminForm({ ...adminForm, email: e.target.value })} />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="adminPassword">Admin Password</Label>
+                  <Input id="adminPassword" type="password" placeholder="••••••••" value={adminForm.password} onChange={(e) => setAdminForm({ ...adminForm, password: e.target.value })} />
+                </div>
+              </>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving || !form.name || !form.slug}>
-              {saving ? 'Saving...' : 'Save'}
+            <Button onClick={handleSave} disabled={saving || !form.name}>
+              {saving ? <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Saving...</> : editing ? 'Update' : 'Create'}
             </Button>
           </DialogFooter>
         </DialogContent>

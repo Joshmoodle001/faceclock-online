@@ -1,9 +1,10 @@
 import { NextResponse } from 'next/server';
+import { createClient } from '@/lib/supabase/server';
 import { createAdminClient } from '@/lib/supabase/admin';
 
 export async function POST(request: Request) {
   try {
-    const { orgName, email, password, displayName } = await request.json();
+    const { orgName, slug, default_timezone, currency, email, password, displayName } = await request.json();
 
     if (!orgName || !email || !password || !displayName) {
       return NextResponse.json({ error: 'All fields are required' }, { status: 400 });
@@ -13,21 +14,15 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Password must be at least 6 characters' }, { status: 400 });
     }
 
-    const slug = orgName
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-|-$/g, '')
-      .slice(0, 50);
-
     const supabase = createAdminClient();
 
     const { data: org, error: orgError } = await supabase
       .from('organizations')
       .insert({
         name: orgName,
-        slug,
-        default_timezone: 'Africa/Johannesburg',
-        currency: 'ZAR',
+        slug: slug || orgName.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 50),
+        default_timezone: default_timezone || 'Africa/Johannesburg',
+        currency: currency || 'ZAR',
         status: 'active',
       })
       .select('id')
