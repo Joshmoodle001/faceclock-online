@@ -16,6 +16,7 @@ const eventConfig: Record<ClockEventType, { icon: React.ElementType; label: stri
   break_start: { icon: Coffee, label: 'Break Start', color: 'text-amber-500' },
   break_end: { icon: Coffee, label: 'Break End', color: 'text-emerald-500' },
   manual_adjustment: { icon: AlertTriangle, label: 'Adjustment', color: 'text-blue-500' },
+  re_clock_in: { icon: Clock, label: 'Re-Clock In', color: 'text-amber-500' },
 };
 
 export function AttendanceTimeline({ events, loading }: AttendanceTimelineProps) {

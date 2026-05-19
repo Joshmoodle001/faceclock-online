@@ -5,15 +5,16 @@ import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Badge } from '@/components/ui/badge';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionPrompt } from '@/components/PermissionPrompt';
 import { OfflineQueueStatus } from '@/components/OfflineQueueStatus';
 import { ClockActionButton } from '@/components/ClockActionButton';
 import { ClockResultCard } from '@/components/ClockResultCard';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
-import { Camera, MapPin, WifiOff, AlertCircle, Smartphone } from 'lucide-react';
+import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, Repeat, Timer, Loader2 } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
-import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
+import type { ClockEventType, ClockResult, AttendanceSession, RepeatClockRule } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
 
@@ -43,8 +44,14 @@ export default function ClockPage() {
   const [faceEnrolled, setFaceEnrolled] = useState<boolean | null>(null);
   const [queuedCount, setQueuedCount] = useState(0);
   const [deviceFingerprint, setDeviceFingerprint] = useState('');
+  const [repeatRules, setRepeatRules] = useState<RepeatClockRule[]>([]);
+  const [reclockCountdown, setReclockCountdown] = useState<number | null>(null);
+  const [reclockRequired, setReclockRequired] = useState(false);
+  const [reclockIntervalSec, setReclockIntervalSec] = useState(0);
+  const [isReclocking, setIsReclocking] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -101,6 +108,12 @@ export default function ClockPage() {
           .eq('status', 'open')
           .maybeSingle();
         setCurrentSession(session as AttendanceSession | null);
+        if (session) {
+          const interval = await fetchRepeatRules();
+          if (interval !== null) {
+            startReclockCountdown(interval);
+          }
+        }
 
         const camStatus = await navigator.permissions.query({ name: 'camera' as PermissionName });
         setCameraPermission(camStatus.state);
@@ -166,6 +179,61 @@ export default function ClockPage() {
     new Promise((resolve, reject) =>
       navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 })
     );
+
+  const fetchRepeatRules = useCallback(async (): Promise<number | null> => {
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return null;
+      const { data: rules } = await supabase
+        .from('repeat_clock_rules')
+        .select('*')
+        .eq('active', true);
+      if (!rules || rules.length === 0) { setRepeatRules([]); return null; }
+      const { data: assignments } = await supabase
+        .from('user_repeat_clock_assignments')
+        .select('rule_id')
+        .eq('user_id', user.id);
+      const assignedIds = new Set((assignments || []).map((a: { rule_id: string }) => a.rule_id));
+      const matched = rules.filter(r => assignedIds.has(r.id));
+      setRepeatRules(matched);
+      if (matched.length === 0) return null;
+      const minInterval = Math.min(...matched.map(r => r.interval_minutes));
+      const intervalSec = minInterval * 60;
+      setReclockIntervalSec(intervalSec);
+      return intervalSec;
+    } catch { return null; }
+  }, []);
+
+  const startReclockCountdown = useCallback((intervalSec: number) => {
+    stopReclockCountdown();
+    setReclockRequired(false);
+    setReclockCountdown(intervalSec);
+    countdownRef.current = setInterval(() => {
+      setReclockCountdown(prev => {
+        if (prev === null || prev <= 1) {
+          setReclockRequired(true);
+          setReclockCountdown(0);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+  }, []);
+
+  const stopReclockCountdown = useCallback(() => {
+    if (countdownRef.current) {
+      clearInterval(countdownRef.current);
+      countdownRef.current = null;
+    }
+    setReclockCountdown(null);
+    setReclockRequired(false);
+  }, []);
+
+  const formatCountdown = (seconds: number): string => {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    return `${m}:${s.toString().padStart(2, '0')}`;
+  };
 
   const captureFrame = (): string | null => {
     const video = videoRef.current;
@@ -235,6 +303,10 @@ export default function ClockPage() {
         });
         if (eventType === 'clock_in') {
           setCurrentSession({ id: 'pending', started_at: payload.occurred_at } as AttendanceSession);
+          const interval = await fetchRepeatRules();
+          if (interval !== null) {
+            startReclockCountdown(interval);
+          }
         } else {
           setCurrentSession(null);
         }
@@ -252,16 +324,39 @@ export default function ClockPage() {
       setClockResult(result);
 
       if (result.decision === 'accepted') {
-        if (eventType === 'clock_in' || eventType === 'break_end') {
+        if (eventType === 'clock_in') {
+          setCurrentSession(result.session || null);
+          const interval = await fetchRepeatRules();
+          if (interval !== null) {
+            startReclockCountdown(interval);
+          }
+        } else if (eventType === 're_clock_in') {
+          // Re-clock verified — keep session, timer resets in handleReclock
+        } else if (eventType === 'break_end') {
           setCurrentSession(result.session || null);
         } else {
           setCurrentSession(null);
+          stopReclockCountdown();
         }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Clock action failed');
     } finally {
       setIsSubmitting(false);
+    }
+  };
+
+  const handleReclock = async () => {
+    setIsReclocking(true);
+    try {
+      await handleClockAction('re_clock_in');
+      setReclockRequired(false);
+      const interval = await fetchRepeatRules();
+      if (interval !== null) {
+        startReclockCountdown(interval);
+      }
+    } finally {
+      setIsReclocking(false);
     }
   };
 
@@ -356,6 +451,39 @@ export default function ClockPage() {
 
       {position && <GeofenceStatusCard latitude={position.coords.latitude} longitude={position.coords.longitude} accuracy={position.coords.accuracy} />}
 
+      {currentSession && repeatRules.length > 0 && reclockCountdown !== null && reclockCountdown > 0 && !reclockRequired && (
+        <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
+          <CardContent className="flex items-center gap-3 py-3 text-sm">
+            <Repeat className="h-4 w-4 text-blue-600 shrink-0" />
+            <span className="flex-1">Re-verification in {formatCountdown(reclockCountdown)}</span>
+            <Badge variant="outline" className="font-mono">{formatCountdown(reclockCountdown)}</Badge>
+          </CardContent>
+        </Card>
+      )}
+
+      {currentSession && reclockRequired && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+          <CardContent className="space-y-3 py-4 text-center">
+            <Timer className="h-8 w-8 mx-auto text-amber-600" />
+            <p className="font-semibold">Re-Clock Required</p>
+            <p className="text-sm text-muted-foreground">Look at the camera and click below to verify your identity.</p>
+            <Button
+              size="lg"
+              className="w-full h-14 text-base font-bold bg-amber-600 hover:bg-amber-700"
+              onClick={handleReclock}
+              disabled={isSubmitting || cameraPermission !== 'granted'}
+            >
+              {isSubmitting ? (
+                <Loader2 className="h-5 w-5 animate-spin mr-2" />
+              ) : (
+                <Camera className="h-5 w-5 mr-2" />
+              )}
+              Re-Clock In
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="space-y-3">
         <ClockActionButton
           isClockedIn={!!currentSession}
@@ -363,12 +491,12 @@ export default function ClockPage() {
           disabled={isSubmitting || cameraPermission !== 'granted'}
           loading={isSubmitting}
         />
-        {currentSession && !isSubmitting && (
+        {currentSession && !isSubmitting && !reclockRequired && (
           <Button variant="outline" className="w-full" onClick={() => handleClockAction('break_start')}>
             Start Break
           </Button>
         )}
-        {currentSession && !isSubmitting && (
+        {currentSession && !isSubmitting && !reclockRequired && (
           <Button variant="outline" className="w-full" onClick={() => handleClockAction('break_end')}>
             End Break
           </Button>

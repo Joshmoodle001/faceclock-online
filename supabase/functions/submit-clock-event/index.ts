@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.224.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.47.12";
 
-type EventType = "clock_in" | "clock_out" | "break_start" | "break_end" | "manual_adjustment";
+type EventType = "clock_in" | "clock_out" | "break_start" | "break_end" | "manual_adjustment" | "re_clock_in";
 type Decision = "accepted" | "rejected" | "review_required";
 
 interface ClockEventInput {
@@ -195,7 +195,7 @@ serve(async (req: Request): Promise<Response> => {
       }
     }
 
-    const validEventTypes: EventType[] = ["clock_in", "clock_out", "break_start", "break_end", "manual_adjustment"];
+    const validEventTypes: EventType[] = ["clock_in", "clock_out", "break_start", "break_end", "manual_adjustment", "re_clock_in"];
     if (!validEventTypes.includes(input.event_type)) {
       return errorResponse(400, `Invalid event_type: ${input.event_type}`);
     }
@@ -341,6 +341,47 @@ serve(async (req: Request): Promise<Response> => {
     };
 
     if (decision === "accepted") {
+      if (input.event_type === "re_clock_in") {
+        const { data: clockEvent, error: insertError } = await supabase
+          .from("clock_events")
+          .insert({
+            ...baseInsert,
+            decision: "accepted",
+            review_state: "none",
+          })
+          .select("id")
+          .single();
+
+        if (insertError) {
+          return errorResponse(500, "Failed to insert re-clock event");
+        }
+
+        await supabase.from("audit_logs").insert({
+          organization_id: profile.organization_id,
+          actor_user_id: user.id,
+          action: "clock_event_accepted",
+          entity_type: "clock_event",
+          entity_id: clockEvent.id,
+          metadata_json: { event_type: input.event_type, risk_scores: riskScores },
+        });
+
+        return new Response(JSON.stringify({
+          decision: "accepted",
+          clock_event_id: clockEvent.id,
+          message: "Re-clock verified",
+          risk_scores: {
+            location: riskScores.location_risk,
+            device: riskScores.device_risk,
+            face_match: riskScores.face_risk,
+            liveness: riskScores.liveness_risk,
+            final: riskScores.final_risk,
+          },
+        }), {
+          status: 200,
+          headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+
       let openSession: AttendanceSession | null = null;
       if (input.event_type === "clock_out" || input.event_type === "break_start" || input.event_type === "break_end") {
         const { data: session, error: sessionError } = await supabase

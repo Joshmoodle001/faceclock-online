@@ -1,6 +1,6 @@
 export type Role = 'super_admin' | 'org_admin' | 'manager' | 'finance_admin' | 'employee';
 export type EmploymentStatus = 'active' | 'inactive' | 'suspended' | 'terminated';
-export type ClockEventType = 'clock_in' | 'clock_out' | 'break_start' | 'break_end' | 'manual_adjustment';
+export type ClockEventType = 'clock_in' | 'clock_out' | 'break_start' | 'break_end' | 'manual_adjustment' | 're_clock_in';
 export type ClockDecision = 'accepted' | 'rejected' | 'review_required';
 export type ReviewState = 'none' | 'pending' | 'approved' | 'rejected';
 export type GeofenceType = 'circle' | 'polygon';
@@ -50,6 +50,24 @@ export interface GeofenceAssignment {
   created_at: string;
 }
 
+export interface RepeatClockRule {
+  id: string;
+  organization_id: string;
+  name: string;
+  interval_minutes: number;
+  active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface RepeatClockAssignment {
+  id: string;
+  rule_id: string;
+  user_id: string;
+  organization_id: string;
+  created_at: string;
+}
+
 export interface DeviceInfo {
   fingerprint: string;
   platform?: string;
@@ -72,6 +90,8 @@ export const tables = {
   payroll_lines: 'payroll_lines',
   audit_logs: 'audit_logs',
   geofence_assignments: 'geofence_assignments',
+  repeat_clock_rules: 'repeat_clock_rules',
+  user_repeat_clock_assignments: 'user_repeat_clock_assignments',
 } as const;
 
 export type Tables = keyof typeof tables;
