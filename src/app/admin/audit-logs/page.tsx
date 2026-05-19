@@ -19,6 +19,7 @@ import {
 import { FileText, Search, AlertCircle, ChevronLeft, ChevronRight } from 'lucide-react';
 import { formatTimestamp } from '@/lib/utils';
 import type { AuditLog } from '@/types';
+import { useOrgId } from '@/lib/supabase/org';
 
 const PAGE_SIZE = 25;
 
@@ -31,13 +32,16 @@ export default function AuditLogsPage() {
   const [actionFilter, setActionFilter] = useState('all');
   const [entityFilter, setEntityFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const { orgId } = useOrgId();
 
-  useEffect(() => { loadLogs(); }, [page, actionFilter, entityFilter]);
+  useEffect(() => { if (orgId) loadLogs(); }, [page, actionFilter, entityFilter, orgId]);
 
   const loadLogs = async () => {
+    if (!orgId) return;
     let query = supabase
       .from('audit_logs')
       .select('*', { count: 'exact' })
+      .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
 

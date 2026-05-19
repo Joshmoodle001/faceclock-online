@@ -17,6 +17,7 @@ import { DeviceTrustBadge } from '@/components/DeviceTrustBadge';
 import { Search, Monitor, Smartphone, AlertCircle } from 'lucide-react';
 import type { Device } from '@/types';
 import { toast } from 'sonner';
+import { useOrgId } from '@/lib/supabase/org';
 
 export default function DevicesPage() {
   const supabase = createClient();
@@ -24,11 +25,13 @@ export default function DevicesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [platformFilter, setPlatformFilter] = useState('all');
+  const { orgId } = useOrgId();
 
-  useEffect(() => { loadDevices(); }, [search, platformFilter]);
+  useEffect(() => { if (orgId) loadDevices(); }, [search, platformFilter, orgId]);
 
   const loadDevices = async () => {
-    let query = supabase.from('devices').select('*, profiles(display_name)').order('last_seen_at', { ascending: false });
+    if (!orgId) return;
+    let query = supabase.from('devices').select('*, profiles(display_name)').eq('organization_id', orgId).order('last_seen_at', { ascending: false });
     if (platformFilter !== 'all') query = query.eq('platform', platformFilter);
     const { data } = await query;
     setDevices(data || []);

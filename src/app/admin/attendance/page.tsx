@@ -22,6 +22,7 @@ import { Search, CalendarCheck, AlertCircle, CheckCircle2 } from 'lucide-react';
 import { formatMinutes, formatTimestamp } from '@/lib/utils';
 import type { AttendanceSession } from '@/types';
 import { toast } from 'sonner';
+import { useOrgId } from '@/lib/supabase/org';
 
 const statusVariant = (s: string) => {
   switch (s) {
@@ -42,11 +43,13 @@ export default function AttendancePage() {
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [adjustmentMinutes, setAdjustmentMinutes] = useState('0');
+  const { orgId } = useOrgId();
 
-  useEffect(() => { loadSessions(); }, [search, statusFilter]);
+  useEffect(() => { if (orgId) loadSessions(); }, [search, statusFilter, orgId]);
 
   const loadSessions = async () => {
-    let query = supabase.from('attendance_sessions').select('*, profiles(display_name)').order('started_at', { ascending: false }).limit(100);
+    if (!orgId) return;
+    let query = supabase.from('attendance_sessions').select('*, profiles(display_name)').eq('organization_id', orgId).order('started_at', { ascending: false }).limit(100);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
     setSessions(data || []);
@@ -69,7 +72,7 @@ export default function AttendancePage() {
     }).eq('id', selectedSession.id);
     if (error) { toast.error('Adjustment failed'); return; }
     await supabase.from('clock_events').insert({
-      organization_id: '', user_id: selectedSession.user_id,
+      organization_id: orgId!, user_id: selectedSession.user_id,
       event_type: 'manual_adjustment', occurred_at: new Date().toISOString(),
       submitted_at: new Date().toISOString(), client_event_id: crypto.randomUUID(),
       review_reason: adjustmentReason, decision: 'accepted', review_state: 'approved',

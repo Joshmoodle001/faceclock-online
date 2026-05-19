@@ -24,11 +24,23 @@ export default function PayrollPage() {
   const [runs, setRuns] = useState<PayrollRun[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
+  const [orgId, setOrgId] = useState<string | null>(null);
 
-  useEffect(() => { loadRuns(); }, [statusFilter]);
+  useEffect(() => {
+    const init = async () => {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
+      if (prof) setOrgId(prof.organization_id);
+    };
+    init();
+  }, []);
+
+  useEffect(() => { if (orgId) loadRuns(); }, [statusFilter, orgId]);
 
   const loadRuns = async () => {
-    let query = supabase.from('payroll_runs').select('*').order('period_start', { ascending: false });
+    if (!orgId) return;
+    let query = supabase.from('payroll_runs').select('*').eq('organization_id', orgId).order('period_start', { ascending: false });
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
     setRuns(data || []);

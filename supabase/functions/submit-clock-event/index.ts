@@ -247,6 +247,7 @@ serve(async (req: Request): Promise<Response> => {
         .select("id, site_id, name, type, radius_m, center_geog, polygon_geom, grace_distance_m, active")
         .eq("id", input.geofence_id)
         .eq("site_id", input.site_id)
+        .eq("organization_id", profile.organization_id)
         .single();
 
       if (gfError || !gf) {

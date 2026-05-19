@@ -62,10 +62,12 @@ export default function LiveMapPage() {
   };
 
   const loadLocations = async () => {
+    if (!orgId) return;
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
     const { data: events } = await supabase
       .from('clock_events')
       .select('user_id, location_geog, accuracy_m, occurred_at, event_type, profiles(display_name)')
+      .eq('organization_id', orgId)
       .gte('occurred_at', threeHoursAgo)
       .not('location_geog', 'is', null)
       .order('occurred_at', { ascending: false });
@@ -95,12 +97,14 @@ export default function LiveMapPage() {
   };
 
   const loadGeofences = async () => {
-    const { data } = await supabase.from('geofences').select('*').eq('active', true);
+    if (!orgId) return;
+    const { data } = await supabase.from('geofences').select('*').eq('organization_id', orgId).eq('active', true);
     setGeofences(data as Geofence[] || []);
   };
 
   const loadSites = async () => {
-    const { data } = await supabase.from('sites').select('*').eq('active', true);
+    if (!orgId) return;
+    const { data } = await supabase.from('sites').select('*').eq('organization_id', orgId).eq('active', true);
     setSites(data as Site[] || []);
   };
 

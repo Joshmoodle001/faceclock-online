@@ -15,6 +15,7 @@ import { ArrowLeft, CheckCircle2, Download, XCircle } from 'lucide-react';
 import { formatCurrency, formatMinutes, formatTimestamp } from '@/lib/utils';
 import type { PayrollRun, PayrollLine } from '@/types';
 import { toast } from 'sonner';
+import { useOrgId } from '@/lib/supabase/org';
 
 export default function PayrollRunDetailPage() {
   const router = useRouter();
@@ -23,14 +24,17 @@ export default function PayrollRunDetailPage() {
   const [run, setRun] = useState<PayrollRun | null>(null);
   const [lines, setLines] = useState<PayrollLine[]>([]);
   const [loading, setLoading] = useState(true);
+  const { orgId } = useOrgId();
 
   useEffect(() => {
-    loadRun();
-  }, []);
+    if (orgId) loadRun();
+  }, [orgId]);
 
   const loadRun = async () => {
-    const { data: runData } = await supabase.from('payroll_runs').select('*').eq('id', params.runId).single();
+    if (!orgId) return;
+    const { data: runData } = await supabase.from('payroll_runs').select('*').eq('id', params.runId).eq('organization_id', orgId).single();
     setRun(runData);
+    if (!runData) { setLoading(false); return; }
     const { data: lineData } = await supabase.from('payroll_lines').select('*').eq('payroll_run_id', params.runId);
     setLines(lineData || []);
     setLoading(false);

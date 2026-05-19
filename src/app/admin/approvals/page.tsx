@@ -19,6 +19,7 @@ import { CheckCircle2, XCircle, AlertCircle, Clock, MapPin, User } from 'lucide-
 import { formatTimestamp } from '@/lib/utils';
 import type { ClockEvent, AttendanceSession } from '@/types';
 import { toast } from 'sonner';
+import { useOrgId } from '@/lib/supabase/org';
 
 const APPROVAL_TABS = [
   { id: 'missed_punches', label: 'Missed Punches', icon: Clock },
@@ -35,14 +36,17 @@ export default function ApprovalsPage() {
   const [reason, setReason] = useState('');
   const [actionTarget, setActionTarget] = useState<string | null>(null);
   const [actionDialog, setActionDialog] = useState<'approve' | 'reject' | null>(null);
+  const { orgId } = useOrgId();
 
-  useEffect(() => { loadItems(); }, [activeTab]);
+  useEffect(() => { if (orgId) loadItems(); }, [activeTab, orgId]);
 
   const loadItems = async () => {
+    if (!orgId) return;
     setLoading(true);
     let query = supabase
       .from('clock_events')
       .select('*, profiles(display_name)')
+      .eq('organization_id', orgId)
       .eq('review_state', 'pending')
       .order('occurred_at', { ascending: false })
       .limit(50);

@@ -59,10 +59,11 @@ export default function LaunchActionsPage() {
     init();
   }, []);
 
-  useEffect(() => { loadActions(); }, []);
+  useEffect(() => { if (orgId) loadActions(); }, [orgId]);
 
   const loadActions = async () => {
-    const { data } = await supabase.from('launch_actions').select('*').order('created_at', { ascending: false });
+    if (!orgId) return;
+    const { data } = await supabase.from('launch_actions').select('*').eq('organization_id', orgId).order('created_at', { ascending: false });
     setActions(data || []);
     setLoading(false);
   };

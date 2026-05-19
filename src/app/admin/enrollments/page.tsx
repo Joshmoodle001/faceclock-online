@@ -16,19 +16,23 @@ import { Eye, CheckCircle2, XCircle, RotateCcw, AlertCircle } from 'lucide-react
 import type { FaceEnrollment } from '@/types';
 import { formatTimestamp } from '@/lib/utils';
 import { toast } from 'sonner';
+import { useOrgId } from '@/lib/supabase/org';
 
 export default function EnrollmentsPage() {
   const supabase = createClient();
   const [enrollments, setEnrollments] = useState<(FaceEnrollment & { profiles?: { display_name?: string } })[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
+  const { orgId } = useOrgId();
 
-  useEffect(() => { loadEnrollments(); }, [statusFilter]);
+  useEffect(() => { if (orgId) loadEnrollments(); }, [statusFilter, orgId]);
 
   const loadEnrollments = async () => {
+    if (!orgId) return;
     let query = supabase
       .from('face_enrollments')
       .select('*, profiles(display_name)')
+      .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;

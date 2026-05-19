@@ -48,10 +48,11 @@ export default function RepeatClocksPage() {
     init();
   }, []);
 
-  useEffect(() => { loadRules(); }, []);
+  useEffect(() => { if (orgId) loadRules(); }, [orgId]);
 
   const loadRules = async () => {
-    const { data } = await supabase.from('repeat_clock_rules').select('*').order('created_at', { ascending: false });
+    if (!orgId) return;
+    const { data } = await supabase.from('repeat_clock_rules').select('*').eq('organization_id', orgId).order('created_at', { ascending: false });
     setRules(data || []);
     setLoading(false);
   };
