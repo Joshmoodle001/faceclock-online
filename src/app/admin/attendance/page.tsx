@@ -43,13 +43,15 @@ export default function AttendancePage() {
   const [adjustmentOpen, setAdjustmentOpen] = useState(false);
   const [adjustmentReason, setAdjustmentReason] = useState('');
   const [adjustmentMinutes, setAdjustmentMinutes] = useState('0');
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
-  useEffect(() => { if (orgId) loadSessions(); }, [search, statusFilter, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadSessions(); }, [search, statusFilter, orgId, isSuper]);
 
   const loadSessions = async () => {
-    if (!orgId) return;
-    let query = supabase.from('attendance_sessions').select('*, profiles(display_name)').eq('organization_id', orgId).order('started_at', { ascending: false }).limit(100);
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('attendance_sessions').select('*, profiles(display_name)').order('started_at', { ascending: false }).limit(100);
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
     setSessions(data || []);

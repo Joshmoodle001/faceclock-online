@@ -23,17 +23,18 @@ export default function EnrollmentsPage() {
   const [enrollments, setEnrollments] = useState<(FaceEnrollment & { profiles?: { display_name?: string } })[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
-  useEffect(() => { if (orgId) loadEnrollments(); }, [statusFilter, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadEnrollments(); }, [statusFilter, orgId, isSuper]);
 
   const loadEnrollments = async () => {
-    if (!orgId) return;
+    if (!isSuper && !orgId) return;
     let query = supabase
       .from('face_enrollments')
       .select('*, profiles(display_name)')
-      .eq('organization_id', orgId)
       .order('created_at', { ascending: false });
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
     setEnrollments(data || []);

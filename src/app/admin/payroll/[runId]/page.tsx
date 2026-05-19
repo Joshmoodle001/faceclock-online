@@ -24,15 +24,18 @@ export default function PayrollRunDetailPage() {
   const [run, setRun] = useState<PayrollRun | null>(null);
   const [lines, setLines] = useState<PayrollLine[]>([]);
   const [loading, setLoading] = useState(true);
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
   useEffect(() => {
-    if (orgId) loadRun();
-  }, [orgId]);
+    if (isSuper || orgId) loadRun();
+  }, [orgId, isSuper]);
 
   const loadRun = async () => {
-    if (!orgId) return;
-    const { data: runData } = await supabase.from('payroll_runs').select('*').eq('id', params.runId).eq('organization_id', orgId).single();
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('payroll_runs').select('*').eq('id', params.runId);
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
+    const { data: runData } = await query.single();
     setRun(runData);
     if (!runData) { setLoading(false); return; }
     const { data: lineData } = await supabase.from('payroll_lines').select('*').eq('payroll_run_id', params.runId);

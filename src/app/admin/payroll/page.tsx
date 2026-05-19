@@ -25,22 +25,25 @@ export default function PayrollPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState('all');
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
 
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
-  useEffect(() => { if (orgId) loadRuns(); }, [statusFilter, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadRuns(); }, [statusFilter, orgId, isSuper]);
 
   const loadRuns = async () => {
-    if (!orgId) return;
-    let query = supabase.from('payroll_runs').select('*').eq('organization_id', orgId).order('period_start', { ascending: false });
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('payroll_runs').select('*').order('period_start', { ascending: false });
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (statusFilter !== 'all') query = query.eq('status', statusFilter);
     const { data } = await query;
     setRuns(data || []);

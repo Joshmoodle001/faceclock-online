@@ -32,29 +32,33 @@ export default function LiveMapPage() {
   const [orgId, setOrgId] = useState<string | null>(null);
   const [selectedEmployee, setSelectedEmployee] = useState<EmployeeLocation | null>(null);
 
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
+
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
   useEffect(() => {
-    if (!orgId) return;
+    if (!isSuper && !orgId) return;
     loadData();
 
-    const channel = supabase
-      .channel('live-map')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'clock_events', filter: `organization_id=eq.${orgId}` }, () => {
-        loadLocations();
-      })
-      .subscribe();
-
-    return () => { supabase.removeChannel(channel); };
-  }, [orgId]);
+    if (orgId) {
+      const channel = supabase
+        .channel('live-map')
+        .on('postgres_changes', { event: '*', schema: 'public', table: 'clock_events', filter: `organization_id=eq.${orgId}` }, () => {
+          loadLocations();
+        })
+        .subscribe();
+      return () => { supabase.removeChannel(channel); };
+    }
+  }, [orgId, isSuper]);
 
   const loadData = async () => {
     await Promise.all([loadLocations(), loadGeofences(), loadSites()]);
@@ -62,15 +66,16 @@ export default function LiveMapPage() {
   };
 
   const loadLocations = async () => {
-    if (!orgId) return;
+    if (!isSuper && !orgId) return;
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
-    const { data: events } = await supabase
+    let q = supabase
       .from('clock_events')
       .select('user_id, location_geog, accuracy_m, occurred_at, event_type, profiles(display_name)')
-      .eq('organization_id', orgId)
       .gte('occurred_at', threeHoursAgo)
       .not('location_geog', 'is', null)
       .order('occurred_at', { ascending: false });
+    if (!isSuper && orgId) q = q.eq('organization_id', orgId);
+    const { data: events } = await q;
 
     if (!events) return;
     type ClockEventWithProfile = { user_id: string; location_geog: string | null; accuracy_m: number | null; occurred_at: string; event_type: string; profiles: { display_name: string } | null };
@@ -97,14 +102,18 @@ export default function LiveMapPage() {
   };
 
   const loadGeofences = async () => {
-    if (!orgId) return;
-    const { data } = await supabase.from('geofences').select('*').eq('organization_id', orgId).eq('active', true);
+    if (!isSuper && !orgId) return;
+    let q = supabase.from('geofences').select('*').eq('active', true);
+    if (!isSuper && orgId) q = q.eq('organization_id', orgId);
+    const { data } = await q;
     setGeofences(data as Geofence[] || []);
   };
 
   const loadSites = async () => {
-    if (!orgId) return;
-    const { data } = await supabase.from('sites').select('*').eq('organization_id', orgId).eq('active', true);
+    if (!isSuper && !orgId) return;
+    let q = supabase.from('sites').select('*').eq('active', true);
+    if (!isSuper && orgId) q = q.eq('organization_id', orgId);
+    const { data } = await q;
     setSites(data as Site[] || []);
   };
 

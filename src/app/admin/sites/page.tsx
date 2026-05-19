@@ -42,21 +42,25 @@ export default function SitesPage() {
   });
   const [saving, setSaving] = useState(false);
 
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
+
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
-  useEffect(() => { if (orgId) loadSites(); }, [search, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadSites(); }, [search, orgId, isSuper]);
 
   const loadSites = async () => {
-    if (!orgId) return;
-    let query = supabase.from('sites').select('*, center_geog').eq('organization_id', orgId).order('name');
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('sites').select('*, center_geog').order('name');
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (search) query = query.ilike('name', `%${search}%`);
     const { data } = await query;
     setSites((data || []).map((s) => {

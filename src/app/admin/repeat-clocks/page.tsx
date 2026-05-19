@@ -27,6 +27,8 @@ export default function RepeatClocksPage() {
   const [rules, setRules] = useState<RepeatClockRule[]>([]);
   const [loading, setLoading] = useState(true);
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<RepeatClockRule | null>(null);
   const [form, setForm] = useState({ name: '', interval_minutes: 60 });
@@ -42,17 +44,19 @@ export default function RepeatClocksPage() {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
-  useEffect(() => { if (orgId) loadRules(); }, [orgId]);
+  useEffect(() => { if (isSuper || orgId) loadRules(); }, [orgId, isSuper]);
 
   const loadRules = async () => {
-    if (!orgId) return;
-    const { data } = await supabase.from('repeat_clock_rules').select('*').eq('organization_id', orgId).order('created_at', { ascending: false });
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('repeat_clock_rules').select('*').order('created_at', { ascending: false });
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
+    const { data } = await query;
     setRules(data || []);
     setLoading(false);
   };

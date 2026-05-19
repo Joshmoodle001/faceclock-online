@@ -38,6 +38,8 @@ export default function LaunchActionsPage() {
   const [actions, setActions] = useState<LaunchAction[]>([]);
   const [loading, setLoading] = useState(true);
   const [orgId, setOrgId] = useState<string | null>(null);
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<LaunchAction | null>(null);
   const [form, setForm] = useState({ name: '', url: '' });
@@ -53,17 +55,19 @@ export default function LaunchActionsPage() {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
-  useEffect(() => { if (orgId) loadActions(); }, [orgId]);
+  useEffect(() => { if (isSuper || orgId) loadActions(); }, [orgId, isSuper]);
 
   const loadActions = async () => {
-    if (!orgId) return;
-    const { data } = await supabase.from('launch_actions').select('*').eq('organization_id', orgId).order('created_at', { ascending: false });
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('launch_actions').select('*').order('created_at', { ascending: false });
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
+    const { data } = await query;
     setActions(data || []);
     setLoading(false);
   };

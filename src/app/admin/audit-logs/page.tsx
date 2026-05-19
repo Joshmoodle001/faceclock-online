@@ -32,18 +32,19 @@ export default function AuditLogsPage() {
   const [actionFilter, setActionFilter] = useState('all');
   const [entityFilter, setEntityFilter] = useState('all');
   const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
-  useEffect(() => { if (orgId) loadLogs(); }, [page, actionFilter, entityFilter, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadLogs(); }, [page, actionFilter, entityFilter, orgId, isSuper]);
 
   const loadLogs = async () => {
-    if (!orgId) return;
+    if (!isSuper && !orgId) return;
     let query = supabase
       .from('audit_logs')
       .select('*', { count: 'exact' })
-      .eq('organization_id', orgId)
       .order('created_at', { ascending: false })
       .range(page * PAGE_SIZE, (page + 1) * PAGE_SIZE - 1);
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
 
     if (actionFilter !== 'all') query = query.eq('action', actionFilter);
     if (entityFilter !== 'all') query = query.eq('entity_type', entityFilter);

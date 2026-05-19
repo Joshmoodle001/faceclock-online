@@ -47,23 +47,27 @@ export default function GeofencesPage() {
     active: true,
   });
 
+  const [role, setRole] = useState<string | null>(null);
+  const isSuper = role === 'super_admin';
+
   useEffect(() => {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
-      const { data: prof } = await supabase.from('profiles').select('organization_id').eq('user_id', user.id).single();
-      if (prof) setOrgId(prof.organization_id);
+      const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
+      if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
     init();
   }, []);
 
-  useEffect(() => { if (orgId) loadGeofences(); }, [search, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadGeofences(); }, [search, orgId, isSuper]);
 
-  useEffect(() => { if (!orgId) return; supabase.from('sites').select('id,name').eq('organization_id', orgId).order('name').then(({ data }) => setSites(data || [])); }, [orgId]);
+  useEffect(() => { if (!isSuper && !orgId) return; const q = supabase.from('sites').select('id,name').order('name'); (isSuper ? q : q.eq('organization_id', orgId!)).then(({ data }) => setSites(data || [])); }, [orgId, isSuper]);
 
   const loadGeofences = async () => {
-    if (!orgId) return;
-    let query = supabase.from('geofences').select('*, sites(name), center_geog').eq('organization_id', orgId).order('name');
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('geofences').select('*, sites(name), center_geog').order('name');
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (search) query = query.ilike('name', `%${search}%`);
     const { data } = await query;
     setGeofences((data || []).map((g) => {
@@ -74,12 +78,10 @@ export default function GeofencesPage() {
   };
 
   const loadEmployees = async () => {
-    if (!orgId) return;
-    const { data } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('organization_id', orgId)
-      .order('display_name');
+    if (!isSuper && !orgId) return;
+    let q = supabase.from('profiles').select('*').order('display_name');
+    if (!isSuper && orgId) q = q.eq('organization_id', orgId);
+    const { data } = await q;
     setEmployees(data || []);
   };
 

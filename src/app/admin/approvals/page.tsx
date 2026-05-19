@@ -36,20 +36,21 @@ export default function ApprovalsPage() {
   const [reason, setReason] = useState('');
   const [actionTarget, setActionTarget] = useState<string | null>(null);
   const [actionDialog, setActionDialog] = useState<'approve' | 'reject' | null>(null);
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
-  useEffect(() => { if (orgId) loadItems(); }, [activeTab, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadItems(); }, [activeTab, orgId, isSuper]);
 
   const loadItems = async () => {
-    if (!orgId) return;
+    if (!isSuper && !orgId) return;
     setLoading(true);
     let query = supabase
       .from('clock_events')
       .select('*, profiles(display_name)')
-      .eq('organization_id', orgId)
       .eq('review_state', 'pending')
       .order('occurred_at', { ascending: false })
       .limit(50);
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
 
     if (activeTab === 'outside_geofence') query = query.eq('within_geofence', false);
     if (activeTab === 'suspicious') query = query.eq('decision', 'review_required');

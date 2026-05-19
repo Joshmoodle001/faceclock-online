@@ -25,13 +25,15 @@ export default function DevicesPage() {
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
   const [platformFilter, setPlatformFilter] = useState('all');
-  const { orgId } = useOrgId();
+  const { orgId, role } = useOrgId();
+  const isSuper = role === 'super_admin';
 
-  useEffect(() => { if (orgId) loadDevices(); }, [search, platformFilter, orgId]);
+  useEffect(() => { if (isSuper || orgId) loadDevices(); }, [search, platformFilter, orgId, isSuper]);
 
   const loadDevices = async () => {
-    if (!orgId) return;
-    let query = supabase.from('devices').select('*, profiles(display_name)').eq('organization_id', orgId).order('last_seen_at', { ascending: false });
+    if (!isSuper && !orgId) return;
+    let query = supabase.from('devices').select('*, profiles(display_name)').order('last_seen_at', { ascending: false });
+    if (!isSuper && orgId) query = query.eq('organization_id', orgId);
     if (platformFilter !== 'all') query = query.eq('platform', platformFilter);
     const { data } = await query;
     setDevices(data || []);
