@@ -33,6 +33,7 @@ export default function ClockPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
+  const [orgName, setOrgName] = useState('');
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentSession, setCurrentSession] = useState<AttendanceSession | null>(null);
   const [clockResult, setClockResult] = useState<ClockResult | null>(null);
@@ -83,10 +84,20 @@ export default function ClockPage() {
 
         const { data: profile } = await supabase
           .from('profiles')
-          .select('display_name')
+          .select('display_name, organization_id')
           .eq('user_id', user.id)
           .single();
-        if (profile) setUserName(profile.display_name);
+        if (profile) {
+          setUserName(profile.display_name);
+          if (profile.organization_id) {
+            const { data: org } = await supabase
+              .from('organizations')
+              .select('name')
+              .eq('id', profile.organization_id)
+              .maybeSingle();
+            if (org) setOrgName(org.name);
+          }
+        }
 
         const { data: enrollment } = await supabase
           .from('face_enrollments')
@@ -416,6 +427,7 @@ export default function ClockPage() {
         <p className="text-sm text-muted-foreground">{dateStr}</p>
         <p className="text-4xl font-bold tracking-tight">{timeStr}</p>
         {userName && <p className="text-sm text-muted-foreground mt-1">Welcome, {userName}</p>}
+        {orgName && <p className="text-xs text-muted-foreground">{orgName}</p>}
       </div>
 
       {cameraPermission !== 'granted' && (

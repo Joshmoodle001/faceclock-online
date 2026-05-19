@@ -50,6 +50,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router = useRouter();
   const pathname = usePathname();
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [orgName, setOrgName] = useState('');
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -68,6 +69,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       if (error) { router.push('/login'); return; }
       if (data) {
         setProfile(data as Profile);
+        if (data.organization_id) {
+          const { data: org } = await supabase
+            .from('organizations')
+            .select('name')
+            .eq('id', data.organization_id)
+            .maybeSingle();
+          if (org) setOrgName(org.name);
+        }
         if (data.role === 'employee') { router.push('/app/clock'); return; }
       }
       setLoading(false);
@@ -109,7 +118,12 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         } ${mobileOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'}`}
       >
         <div className="flex items-center justify-between h-16 px-4 border-b">
-          {!collapsed && <span className="font-bold text-lg">FaceAttend</span>}
+          {!collapsed && (
+            <div className="truncate">
+              <p className="font-bold text-lg leading-tight">FaceAttend</p>
+              {orgName && <p className="text-xs text-muted-foreground truncate">{orgName}</p>}
+            </div>
+          )}
           <Button variant="ghost" size="icon" onClick={() => { setCollapsed(!collapsed); setMobileOpen(false); }}>
             {collapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
           </Button>
