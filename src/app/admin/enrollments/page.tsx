@@ -21,7 +21,7 @@ export default function EnrollmentsPage() {
   const supabase = createClient();
   const [enrollments, setEnrollments] = useState<(FaceEnrollment & { profiles?: { display_name?: string } })[]>([]);
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('pending_review');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   useEffect(() => { loadEnrollments(); }, [statusFilter]);
 

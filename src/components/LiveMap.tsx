@@ -12,6 +12,7 @@ interface EmployeeLocation {
   longitude: number;
   accuracy_m?: number;
   status: string;
+  occurred_at?: string;
 }
 
 interface LiveMapProps {
@@ -19,6 +20,31 @@ interface LiveMapProps {
   geofences: Geofence[];
   sites: Site[];
   onMarkerClick?: (employee: EmployeeLocation) => void;
+}
+
+function createCirclePolygon(lat: number, lng: number, radiusMeters: number, points = 48): [number, number][] {
+  const coords: [number, number][] = [];
+  for (let i = 0; i <= points; i++) {
+    const angle = (i / points) * 2 * Math.PI;
+    const dx = radiusMeters * Math.cos(angle);
+    const dy = radiusMeters * Math.sin(angle);
+    const dLat = dy / 111320;
+    const dLng = dx / (111320 * Math.cos(lat * Math.PI / 180));
+    coords.push([lng + dLng, lat + dLat]);
+  }
+  return coords;
+}
+
+const ACC_SOURCE_ID = 'accuracy-circles';
+
+function formatLocationAge(occurredAt?: string): string {
+  if (!occurredAt) return '';
+  const ageMs = Date.now() - new Date(occurredAt).getTime();
+  const ageMin = Math.floor(ageMs / 60000);
+  if (ageMin < 1) return 'Just now';
+  if (ageMin < 60) return `${ageMin}m ago`;
+  const ageHr = Math.floor(ageMin / 60);
+  return `${ageHr}h ${ageMin % 60}m ago`;
 }
 
 export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapProps) {
@@ -39,6 +65,27 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
     mapRef.current = map;
 
+    map.on('load', () => {
+      if (!map.getSource(ACC_SOURCE_ID)) {
+        map.addSource(ACC_SOURCE_ID, {
+          type: 'geojson',
+          data: { type: 'FeatureCollection', features: [] },
+        });
+        map.addLayer({
+          id: 'accuracy-circles-fill',
+          type: 'fill',
+          source: ACC_SOURCE_ID,
+          paint: { 'fill-color': '#22c55e', 'fill-opacity': 0.08 },
+        });
+        map.addLayer({
+          id: 'accuracy-circles-outline',
+          type: 'line',
+          source: ACC_SOURCE_ID,
+          paint: { 'line-color': '#22c55e', 'line-opacity': 0.25, 'line-width': 1 },
+        });
+      }
+    });
+
     return () => {
       map.remove();
       mapRef.current = null;
@@ -52,15 +99,17 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
     markersRef.current.forEach((m) => m.remove());
     markersRef.current = [];
 
+    const validEmployees = employees.filter(e => e.latitude !== 0 && e.longitude !== 0);
     const bounds = new maplibregl.LngLatBounds();
 
-    employees.forEach((emp) => {
+    validEmployees.forEach((emp) => {
       const el = document.createElement('div');
       el.className = 'cursor-pointer';
+      const statusColor = emp.status === 'clocked_in' ? '#22c55e' : emp.status === 'late' ? '#f59e0b' : '#6b7280';
       el.innerHTML = `
         <div style="
           width: 24px; height: 24px; border-radius: 50%;
-          background: ${emp.status === 'clocked_in' ? '#22c55e' : '#6b7280'};
+          background: ${statusColor};
           border: 3px solid white; box-shadow: 0 2px 4px rgba(0,0,0,0.3);
           display: flex; align-items: center; justify-content: center;
           font-size: 10px; color: white; font-weight: bold;
@@ -72,29 +121,43 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
         .setLngLat([emp.longitude, emp.latitude])
         .addTo(map);
 
-      if (emp.accuracy_m && emp.accuracy_m > 0) {
-        const accEl = document.createElement('div');
-        accEl.style.cssText = `
-          position: absolute; top: 50%; left: 50%; translate: -50% -50%;
-          width: ${emp.accuracy_m * 2}px; height: ${emp.accuracy_m * 2}px;
-          border-radius: 50%; background: rgba(34, 197, 94, 0.1);
-          border: 1px solid rgba(34, 197, 94, 0.3); pointer-events: none;
-        `;
-        el.appendChild(accEl);
-      }
-
       markersRef.current.push(marker);
       bounds.extend([emp.longitude, emp.latitude]);
 
-      const popup = new maplibregl.Popup({ offset: 25 })
-        .setHTML(`<div style="font-weight: 500; font-size: 13px;">${emp.display_name}</div>
-          <div style="font-size: 11px; color: #666;">${emp.status.replace('_', ' ')}</div>`);
+      const ageStr = formatLocationAge(emp.occurred_at);
+      const popupLines = [
+        `<div style="font-weight: 500; font-size: 13px;">${emp.display_name}</div>`,
+        `<div style="font-size: 11px; color: #666;">${emp.status.replace('_', ' ')}</div>`,
+      ];
+      if (ageStr) {
+        popupLines.push(`<div style="font-size: 11px; color: #999;">Location: ${ageStr}</div>`);
+      }
+      if (emp.accuracy_m && emp.accuracy_m > 0) {
+        popupLines.push(`<div style="font-size: 11px; color: #999;">Accuracy: ±${emp.accuracy_m.toFixed(0)}m</div>`);
+      }
+      const popup = new maplibregl.Popup({ offset: 25 }).setHTML(popupLines.join(''));
       marker.setPopup(popup);
     });
 
+    const circles = validEmployees
+      .filter(e => e.accuracy_m && e.accuracy_m > 0)
+      .map(e => ({
+        type: 'Feature' as const,
+        properties: {},
+        geometry: {
+          type: 'Polygon' as const,
+          coordinates: [createCirclePolygon(e.latitude, e.longitude, e.accuracy_m!)],
+        },
+      }));
+    try {
+      const source = map.getSource(ACC_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+      if (source) {
+        source.setData({ type: 'FeatureCollection', features: circles });
+      }
+    } catch { /* source not ready yet */ }
+
     geofences.forEach((gf) => {
       if (gf.type === 'circle' && gf.latitude && gf.longitude && gf.radius_m) {
-        const color = gf.active ? 'rgba(59, 130, 246, 0.2)' : 'rgba(156, 163, 175, 0.2)';
         const border = gf.active ? '#3b82f6' : '#9ca3af';
         new maplibregl.Marker({ color: border })
           .setLngLat([gf.longitude, gf.latitude])
@@ -120,7 +183,7 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
     if (!bounds.isEmpty()) {
       map.fitBounds(bounds, { padding: 50, maxZoom: 15 });
     }
-  }, [employees, geofences, sites]);
+  }, [employees, geofences, sites, onMarkerClick]);
 
   return <div ref={containerRef} className="w-full h-full min-h-[400px]" />;
 }

@@ -20,6 +20,7 @@ interface EmployeeLocation {
   longitude: number;
   accuracy_m?: number;
   status: string;
+  occurred_at?: string;
 }
 
 export default function LiveMapPage() {
@@ -86,6 +87,7 @@ export default function LiveMapPage() {
           longitude: lng,
           accuracy_m: evt.accuracy_m ?? undefined,
           status: evt.event_type === 'clock_in' || evt.event_type === 'break_end' ? 'clocked_in' : 'clocked_out',
+          occurred_at: evt.occurred_at,
         });
       }
     }

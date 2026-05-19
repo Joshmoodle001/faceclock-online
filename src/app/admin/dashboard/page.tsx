@@ -6,8 +6,10 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Users, Clock, AlertTriangle, MapPin, Eye, Wallet, ArrowRight } from 'lucide-react';
+import { Users, Clock, AlertTriangle, MapPin, Eye, Wallet, ArrowRight, RefreshCw, Radio } from 'lucide-react';
 import { useRouter } from 'next/navigation';
+import { LiveMap } from '@/components/LiveMap';
+import type { Geofence, Site } from '@/types';
 
 interface DashboardStats {
   total_employees: number;
@@ -18,19 +20,51 @@ interface DashboardStats {
   suspicious_events: number;
 }
 
+interface MapEmployee {
+  user_id: string;
+  display_name: string;
+  latitude: number;
+  longitude: number;
+  accuracy_m?: number;
+  status: string;
+  occurred_at?: string;
+}
+
 export default function DashboardPage() {
   const router = useRouter();
   const supabase = createClient();
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [orgId, setOrgId] = useState<string | null>(null);
+  const [mapEmployees, setMapEmployees] = useState<MapEmployee[]>([]);
+  const [geofences, setGeofences] = useState<Geofence[]>([]);
+  const [sites, setSites] = useState<Site[]>([]);
 
   useEffect(() => {
     loadStats();
   }, []);
 
+  useEffect(() => {
+    if (!orgId) return;
+    loadGeofences();
+    loadSites();
+
+    const channel = supabase
+      .channel('dashboard-live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance_sessions', filter: `organization_id=eq.${orgId}` }, () => {
+        loadStats();
+      })
+      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'clock_events', filter: `organization_id=eq.${orgId}` }, () => {
+        loadStats();
+      })
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
+  }, [orgId]);
+
   const loadStats = async () => {
     const { data: { user } } = await supabase.auth.getUser();
-    if (!user) return;
+    if (!user) { setLoading(false); return; }
     const { data: profile } = await supabase
       .from('profiles')
       .select('organization_id')
@@ -38,35 +72,120 @@ export default function DashboardPage() {
       .single();
     if (!profile) { setLoading(false); return; }
 
-    // These queries would typically aggregate via Edge Functions or views
-    // For demo, showing realistic placeholder structure
+    const oid = profile.organization_id;
+    setOrgId(oid);
+
     const { count: empCount } = await supabase
       .from('profiles')
       .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id)
+      .eq('organization_id', oid)
       .eq('employment_status', 'active');
+
+    const { data: openSessions } = await supabase
+      .from('attendance_sessions')
+      .select('user_id, started_at')
+      .eq('organization_id', oid)
+      .eq('status', 'open');
+
+    const clockedInCount = openSessions?.length || 0;
+
+    let lateCount = 0;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const nineAmToday = new Date(`${todayStr}T09:00:00`);
+
+    if (openSessions && openSessions.length > 0) {
+      const userIds = openSessions.map((s: any) => s.user_id);
+
+      const { data: profilesData } = await supabase
+        .from('profiles')
+        .select('user_id, display_name')
+        .in('user_id', userIds);
+
+      const nameMap = new Map<string, string>();
+      if (profilesData) {
+        for (const p of profilesData) nameMap.set(p.user_id, p.display_name || 'Unknown');
+      }
+
+      const { data: events } = await supabase
+        .from('clock_events')
+        .select('user_id, location_geog, accuracy_m, occurred_at')
+        .in('user_id', userIds)
+        .not('location_geog', 'is', null)
+        .order('occurred_at', { ascending: false });
+
+      const seen = new Set<string>();
+      const locMap = new Map<string, { lng: number; lat: number; acc?: number; occurred_at?: string }>();
+      if (events) {
+        for (const evt of events as any[]) {
+          if (!seen.has(evt.user_id)) {
+            seen.add(evt.user_id);
+            const m = evt.location_geog.match(/POINT\(([\d.-]+) ([\d.-]+)\)/);
+            if (m) {
+              locMap.set(evt.user_id, { lng: parseFloat(m[1]), lat: parseFloat(m[2]), acc: evt.accuracy_m ?? undefined, occurred_at: evt.occurred_at });
+            }
+          }
+        }
+      }
+
+      const employees: MapEmployee[] = [];
+      for (const session of openSessions as any[]) {
+        const startedAt = new Date(session.started_at);
+        const isLate = startedAt > nineAmToday;
+        if (isLate) lateCount++;
+
+        const loc = locMap.get(session.user_id);
+        employees.push({
+          user_id: session.user_id,
+          display_name: nameMap.get(session.user_id) || 'Unknown',
+          latitude: loc?.lat || 0,
+          longitude: loc?.lng || 0,
+          accuracy_m: loc?.acc,
+          status: isLate ? 'late' : 'clocked_in',
+          occurred_at: loc?.occurred_at,
+        });
+      }
+      setMapEmployees(employees);
+    }
 
     const { count: pendingCount } = await supabase
       .from('face_enrollments')
       .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id)
+      .eq('organization_id', oid)
       .eq('status', 'pending_review');
+
+    const { count: outsideCount } = await supabase
+      .from('clock_events')
+      .select('*', { count: 'exact', head: true })
+      .eq('organization_id', oid)
+      .eq('within_geofence', false);
 
     const { count: suspiciousCount } = await supabase
       .from('clock_events')
       .select('*', { count: 'exact', head: true })
-      .eq('organization_id', profile.organization_id)
+      .eq('organization_id', oid)
       .eq('review_state', 'pending');
 
     setStats({
       total_employees: empCount || 0,
-      clocked_in: Math.floor((empCount || 0) * 0.35),
-      late_today: Math.floor((empCount || 0) * 0.05),
-      outside_geofence: Math.floor((empCount || 0) * 0.02),
+      clocked_in: clockedInCount,
+      late_today: lateCount,
+      outside_geofence: outsideCount || 0,
       pending_reviews: pendingCount || 0,
       suspicious_events: suspiciousCount || 0,
     });
     setLoading(false);
+  };
+
+  const loadGeofences = async () => {
+    if (!orgId) return;
+    const { data } = await supabase.from('geofences').select('*').eq('organization_id', orgId).eq('active', true);
+    setGeofences(data as Geofence[] || []);
+  };
+
+  const loadSites = async () => {
+    if (!orgId) return;
+    const { data } = await supabase.from('sites').select('*').eq('organization_id', orgId).eq('active', true);
+    setSites(data as Site[] || []);
   };
 
   if (loading) {
@@ -106,6 +225,39 @@ export default function DashboardPage() {
           </Card>
         ))}
       </div>
+
+      {/* Live Map */}
+      {mapEmployees.some(e => e.latitude !== 0 && e.longitude !== 0) && (
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-lg">Live Map</CardTitle>
+            <div className="flex items-center gap-3 text-sm text-muted-foreground">
+              <Radio className="h-3.5 w-3.5 text-emerald-500 animate-pulse" />
+              <span className="text-xs">Live</span>
+              <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-emerald-500 inline-block" /> Clocked In</div>
+              <div className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500 inline-block" /> Late</div>
+              <Button variant="ghost" size="icon" onClick={() => { loadGeofences(); loadSites(); loadStats(); }}><RefreshCw className="h-4 w-4" /></Button>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="h-[400px] rounded-lg overflow-hidden border">
+              <LiveMap
+                employees={mapEmployees.map(e => ({
+                  user_id: e.user_id,
+                  display_name: e.display_name,
+                  latitude: e.latitude,
+                  longitude: e.longitude,
+                  accuracy_m: e.accuracy_m,
+                  status: e.status === 'late' ? 'late' : 'clocked_in',
+                  occurred_at: e.occurred_at,
+                }))}
+                geofences={geofences}
+                sites={sites}
+              />
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Stats Row */}
       <div className="grid gap-4 md:grid-cols-2">

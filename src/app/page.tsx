@@ -3,6 +3,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+
 import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -10,32 +11,46 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { PermissionPrompt } from '@/components/PermissionPrompt';
 import { OfflineQueueStatus } from '@/components/OfflineQueueStatus';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
-import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut, Loader2 } from 'lucide-react';
+import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, LogOut, Loader2, CheckCircle2 } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import {
   detectFace,
   captureFaceRegion,
   computeAverageHash,
-  hashToMatchScore,
+  weightedHashToMatchScore,
   createMotionBuffer,
   pushMotionFrame,
   computeMotionScore,
   initFaceDetection,
+  analyzeExposure,
+  estimateFaceDistance,
 } from '@/lib/face';
-import type { ClockEventType, ClockResult, AttendanceSession } from '@/types';
+import type { ClockResult, AttendanceSession } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
-const DETECT_INTERVAL = 500;
+const DETECT_INTERVAL = 250;
 const AUTO_CLOCK_OUT_DELAY = 15000;
-const MATCH_THRESHOLD = 0.7;
+const MATCH_THRESHOLD = 0.55;
+const RECLOCK_COOLDOWN = 5000;
+const SUCCESS_DISPLAY_MS = 2500;
+const FRAME_BUF_SIZE = 2;
+
+interface EnrolledUser {
+  userId: string;
+  organizationId: string;
+  displayName: string;
+  hash: string;
+}
 
 export default function HomePage() {
-  const router = useRouter();
   const supabase = createClient();
+  const router = useRouter();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [user, setUser] = useState<any | null>(null);
-  const [userName, setUserName] = useState('');
+  const [authUser, setAuthUser] = useState<any | null>(null);
+  const [enrolledUsers, setEnrolledUsers] = useState<EnrolledUser[]>([]);
+  const [matchedUser, setMatchedUser] = useState<EnrolledUser | null>(null);
+  const [bestMatchScore, setBestMatchScore] = useState(0);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentSession, setCurrentSession] = useState<AttendanceSession | null>(null);
   const [clockResult, setClockResult] = useState<ClockResult | null>(null);
@@ -47,18 +62,27 @@ export default function HomePage() {
   const [deviceFingerprint, setDeviceFingerprint] = useState('');
   const [faceInFrame, setFaceInFrame] = useState(false);
   const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
-  const [faceMatched, setFaceMatched] = useState(false);
-  const [enrolledHash, setEnrolledHash] = useState<string | null>(null);
   const [mediapipeReady, setMediapipeReady] = useState(false);
-  const [lastMatchScore, setLastMatchScore] = useState(0);
   const [autoStatus, setAutoStatus] = useState<'idle' | 'scanning' | 'clocking_in' | 'clocked_in' | 'clocking_out'>('idle');
+  const [cameraActive, setCameraActive] = useState(true);
+  const [exposure, setExposure] = useState<'dark' | 'bright' | 'normal' | null>(null);
+  const [faceDistance, setFaceDistance] = useState<'far' | 'good' | 'close' | null>(null);
+  const scanStartRef = useRef<number | null>(null);
+  const [scanDuration, setScanDuration] = useState(0);
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const motionBufRef = useRef(createMotionBuffer());
   const faceLostAtRef = useRef<number | null>(null);
   const autoInProgressRef = useRef(false);
+  const lastClockOutRef = useRef(0);
+  const lastMatchedUserIdRef = useRef<string | null>(null);
+  const sessionCheckedUserIdRef = useRef<string | null>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const frameBufRef = useRef<ImageData[]>([]);
+  const [successType, setSuccessType] = useState<'clock_in' | 'clock_out' | null>(null);
+  const clockOutVerificationRef = useRef<'idle' | 'awaiting_face'>('idle');
+  const [isVerifyingClockOut, setIsVerifyingClockOut] = useState(false);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -82,39 +106,46 @@ export default function HomePage() {
   useEffect(() => {
     const init = async () => {
       try {
-        const { data: { user: authUser } } = await supabase.auth.getUser();
-        setUser(authUser);
+        const { data: { user: u } } = await supabase.auth.getUser();
+        setAuthUser(u);
 
-        if (authUser) {
-          const { data: profile } = await supabase
+        const { data: enrollments, error: enrollError } = await supabase
+          .from('face_enrollments')
+          .select('user_id, organization_id, face_descriptor')
+          .eq('active', true)
+          .neq('status', 'rejected');
+
+        if (enrollError) {
+          console.error('Failed to load enrollments:', enrollError);
+        }
+
+        if (enrollments && enrollments.length > 0) {
+          const userIds = [...new Set(enrollments.map((e: any) => e.user_id))];
+          const { data: profiles } = await supabase
             .from('profiles')
-            .select('display_name')
-            .eq('user_id', authUser.id)
-            .maybeSingle();
-          if (profile) setUserName(profile.display_name);
+            .select('user_id, display_name')
+            .in('user_id', userIds);
 
-          const { data: enrollment } = await supabase
-            .from('face_enrollments')
-            .select('face_descriptor')
-            .eq('user_id', authUser.id)
-            .eq('active', true)
-            .eq('status', 'approved')
-            .maybeSingle();
-
-          if (enrollment?.face_descriptor) {
-            const hash = String.fromCharCode(...enrollment.face_descriptor);
-            setEnrolledHash(hash);
+          const profileMap = new Map<string, string>();
+          if (profiles) {
+            for (const p of profiles) {
+              profileMap.set(p.user_id, p.display_name || 'Unknown');
+            }
           }
 
-          const { data: session } = await supabase
-            .from('attendance_sessions')
-            .select('*')
-            .eq('user_id', authUser.id)
-            .eq('status', 'open')
-            .maybeSingle();
-          const s = session as AttendanceSession | null;
-          setCurrentSession(s);
-          if (s) setAutoStatus('clocked_in');
+          const users: EnrolledUser[] = [];
+          for (const e of enrollments) {
+            const desc = (e as any).face_descriptor as number[] | null;
+            if (desc && Array.isArray(desc) && desc.length > 0) {
+              users.push({
+                userId: e.user_id,
+                organizationId: e.organization_id,
+                displayName: profileMap.get(e.user_id) || 'Unknown',
+                hash: String.fromCharCode(...desc),
+              });
+            }
+          }
+          setEnrolledUsers(users);
         }
 
         const camStatus = await navigator.permissions.query({ name: 'camera' as PermissionName });
@@ -191,8 +222,20 @@ export default function HomePage() {
     if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
   }, []);
 
+  const fetchOpenSession = async (userId: string) => {
+    const { data: session } = await supabase
+      .from('attendance_sessions')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('status', 'open')
+      .maybeSingle();
+    return session as AttendanceSession | null;
+  };
+
   const startDetectionLoop = () => {
     motionBufRef.current = createMotionBuffer();
+    sessionCheckedUserIdRef.current = null;
+    frameBufRef.current = [];
 
     timerRef.current = setInterval(async () => {
       const video = videoRef.current;
@@ -206,29 +249,95 @@ export default function HomePage() {
           drawFaceBox(result.box);
           pushMotionFrame(motionBufRef.current, result.box);
           faceLostAtRef.current = null;
+          if (scanStartRef.current === null) scanStartRef.current = Date.now();
 
-          if (user && enrolledHash && !autoInProgressRef.current) {
-            const region = captureFaceRegion(video, result.box, 64);
-            if (region) {
-              const currentHash = computeAverageHash(region);
-              const score = hashToMatchScore(currentHash, enrolledHash);
-              setLastMatchScore(score);
+          const region = captureFaceRegion(video, result.box, 64);
+          if (region) {
+            setExposure(analyzeExposure(region));
+            setFaceDistance(estimateFaceDistance(result.box, video.videoWidth || 640, video.videoHeight || 480));
+          }
+          if (region && enrolledUsers.length > 0) {
+            frameBufRef.current.push(region);
+            if (frameBufRef.current.length > FRAME_BUF_SIZE) frameBufRef.current.shift();
 
-              if (score >= MATCH_THRESHOLD) {
-                setFaceMatched(true);
-                if (!currentSession && autoStatus !== 'clocking_in') {
-                  triggerAutoClockIn();
+            let hashRegion: ImageData;
+            if (frameBufRef.current.length >= FRAME_BUF_SIZE) {
+              const w = region.width, h = region.height;
+              const avgData = new Uint8ClampedArray(w * h * 4);
+              for (let px = 0; px < w * h; px++) {
+                let r = 0, g = 0, b = 0, a = 0;
+                for (const f of frameBufRef.current) {
+                  r += f.data[px * 4];
+                  g += f.data[px * 4 + 1];
+                  b += f.data[px * 4 + 2];
+                  a += f.data[px * 4 + 3];
                 }
-              } else {
-                setFaceMatched(false);
+                const n = frameBufRef.current.length;
+                avgData[px * 4] = r / n;
+                avgData[px * 4 + 1] = g / n;
+                avgData[px * 4 + 2] = b / n;
+                avgData[px * 4 + 3] = a / n;
+              }
+              hashRegion = new ImageData(avgData, w, h);
+            } else {
+              hashRegion = region;
+            }
+
+            const currentHash = computeAverageHash(hashRegion);
+            let bestScore = 0;
+            let bestUser: EnrolledUser | null = null;
+
+            for (const eu of enrolledUsers) {
+              const score = weightedHashToMatchScore(currentHash, eu.hash);
+              if (score > bestScore) {
+                bestScore = score;
+                bestUser = eu;
               }
             }
+
+            setBestMatchScore(bestScore);
+            setMatchedUser(bestUser);
+
+            if (bestScore >= MATCH_THRESHOLD && bestUser && !autoInProgressRef.current) {
+              if (clockOutVerificationRef.current === 'awaiting_face' && currentSession && bestUser.userId === currentSession.user_id) {
+                clockOutVerificationRef.current = 'idle';
+                setIsVerifyingClockOut(false);
+                triggerAutoClockOut();
+                return;
+              }
+
+              if (lastMatchedUserIdRef.current !== bestUser.userId) {
+                lastMatchedUserIdRef.current = bestUser.userId;
+                sessionCheckedUserIdRef.current = null;
+              }
+
+              if (sessionCheckedUserIdRef.current !== bestUser.userId) {
+                sessionCheckedUserIdRef.current = bestUser.userId;
+                const session = await fetchOpenSession(bestUser.userId);
+                if (session) {
+                  setCurrentSession(session);
+                  setAutoStatus('clocked_in');
+                  return;
+                }
+              }
+
+              if (!currentSession && autoStatus !== 'clocking_in' && Date.now() - lastClockOutRef.current > RECLOCK_COOLDOWN) {
+                triggerAutoClockIn(bestUser);
+              }
+            }
+          } else if (region && enrolledUsers.length === 0) {
+            setBestMatchScore(0);
+            setMatchedUser(null);
           }
         } else {
           setFaceInFrame(false);
           setFaceBox(null);
-          setFaceMatched(false);
+          setBestMatchScore(0);
+          setMatchedUser(null);
+          setExposure(null);
+          setFaceDistance(null);
           clearBox();
+          scanStartRef.current = null;
           if (currentSession && faceLostAtRef.current === null) {
             faceLostAtRef.current = Date.now();
           }
@@ -236,13 +345,15 @@ export default function HomePage() {
       } catch {
         setFaceInFrame(false);
         setFaceBox(null);
+        setExposure(null);
+        setFaceDistance(null);
         clearBox();
       }
     }, DETECT_INTERVAL);
   };
 
   useEffect(() => {
-    if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in' && !autoInProgressRef.current) {
+    if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in' && !autoInProgressRef.current && clockOutVerificationRef.current !== 'awaiting_face') {
       const elapsed = Date.now() - faceLostAtRef.current;
       if (elapsed > AUTO_CLOCK_OUT_DELAY) {
         triggerAutoClockOut();
@@ -278,17 +389,28 @@ export default function HomePage() {
       navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 })
     );
 
-  const triggerAutoClockIn = async () => {
+  const startClockOutVerification = () => {
+    clockOutVerificationRef.current = 'awaiting_face';
+    setIsVerifyingClockOut(true);
+    setError(null);
+    setCameraActive(true);
+    startCamera();
+  };
+
+  const cancelClockOutVerification = () => {
+    clockOutVerificationRef.current = 'idle';
+    setIsVerifyingClockOut(false);
+    stopCamera();
+    setCameraActive(false);
+  };
+
+  const triggerAutoClockIn = async (matched: EnrolledUser) => {
     if (autoInProgressRef.current) return;
     autoInProgressRef.current = true;
     setAutoStatus('clocking_in');
-    setError(null);
     setClockResult(null);
 
     try {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      if (!u) { autoInProgressRef.current = false; setAutoStatus('idle'); return; }
-
       let lat: number | undefined;
       let lng: number | undefined;
       let accuracy: number | undefined;
@@ -297,35 +419,70 @@ export default function HomePage() {
       }
 
       const motionScore = computeMotionScore(motionBufRef.current);
-
+      const now = new Date().toISOString();
       const clientEventId = generateClientId();
-      const { error: fnError } = await supabase.functions.invoke('submit-clock-event', {
-        body: {
+      const locationWkt = `SRID=4326;POINT(${lng ?? 0} ${lat ?? 0})`;
+
+      const { data: clockEvent, error: ceError } = await supabase
+        .from('clock_events')
+        .insert({
+          organization_id: matched.organizationId,
+          user_id: matched.userId,
           event_type: 'clock_in',
-          occurred_at: new Date().toISOString(),
+          occurred_at: now,
+          submitted_at: now,
           client_event_id: clientEventId,
-          latitude: lat ?? 0,
-          longitude: lng ?? 0,
+          location_geog: locationWkt,
           accuracy_m: accuracy ?? 0,
-          face_match_score: lastMatchScore || 0.7,
+          face_match_score: bestMatchScore || 0.7,
           liveness_score: motionScore || 0.3,
           device_fingerprint: deviceFingerprint,
-          timestamp: new Date().toISOString(),
-        },
-      });
+          face_match_method: 'mediapipe-perceptual-hash',
+          decision: 'accepted',
+          review_state: 'none',
+        })
+        .select('id')
+        .single();
 
-      if (fnError) throw new Error(fnError.message);
+      if (ceError) throw new Error(ceError.message);
 
-      const { data: session } = await supabase
+      const { data: newSession, error: sessionError } = await supabase
         .from('attendance_sessions')
+        .insert({
+          user_id: matched.userId,
+          organization_id: matched.organizationId,
+          opened_by_event_id: clockEvent.id,
+          started_at: now,
+          status: 'open',
+          break_minutes: 0,
+        })
         .select('*')
-        .eq('user_id', u.id)
-        .eq('status', 'open')
-        .maybeSingle();
+        .single();
 
-      if (session) {
-        setCurrentSession(session as AttendanceSession);
+      if (sessionError) throw new Error(sessionError.message);
+
+      if (newSession) {
+        setCurrentSession(newSession as AttendanceSession);
         setAutoStatus('clocked_in');
+        setSuccessType('clock_in');
+        if (timerRef.current) clearInterval(timerRef.current);
+        if (streamRef.current) {
+          streamRef.current.getTracks().forEach(t => t.stop());
+          streamRef.current = null;
+        }
+        setCameraActive(false);
+        setTimeout(() => setSuccessType(null), SUCCESS_DISPLAY_MS);
+        supabase.from('user_launch_assignments')
+          .select('launch_actions(url, name)')
+          .eq('user_id', matched.userId)
+          .limit(1)
+          .then(({ data: launches }) => {
+            const row = launches?.[0] as unknown as { launch_actions?: { url: string; name: string } } | undefined;
+            const action = row?.launch_actions;
+            if (action?.url && confirm(`Open "${action.name || 'link'}"?\n\n${action.url}`)) {
+              window.open(action.url, '_blank');
+            }
+          });
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auto clock-in failed');
@@ -340,10 +497,10 @@ export default function HomePage() {
     autoInProgressRef.current = true;
     setAutoStatus('clocking_out');
     setError(null);
+    setSuccessType(null);
 
     try {
-      const { data: { user: u } } = await supabase.auth.getUser();
-      if (!u || !currentSession) { autoInProgressRef.current = false; setAutoStatus('clocked_in'); return; }
+      if (!currentSession) { autoInProgressRef.current = false; setAutoStatus('clocked_in'); return; }
 
       let lat: number | undefined;
       let lng: number | undefined;
@@ -353,36 +510,60 @@ export default function HomePage() {
       }
 
       const clientEventId = generateClientId();
-      const { error: fnError } = await supabase.functions.invoke('submit-clock-event', {
-        body: {
-          event_type: 'clock_out',
-          occurred_at: new Date().toISOString(),
-          client_event_id: clientEventId,
-          latitude: lat ?? 0,
-          longitude: lng ?? 0,
-          accuracy_m: accuracy ?? 0,
-          face_match_score: 0,
-          liveness_score: 0,
-          device_fingerprint: deviceFingerprint,
-          timestamp: new Date().toISOString(),
-        },
-      });
+      const now = new Date().toISOString();
+      const locationWkt = `SRID=4326;POINT(${lng ?? 0} ${lat ?? 0})`;
 
-      if (fnError) throw new Error(fnError.message);
+      const { error: ceError } = await supabase
+        .from('clock_events')
+        .insert({
+          organization_id: currentSession.organization_id,
+          user_id: currentSession.user_id,
+          event_type: 'clock_out',
+          occurred_at: now,
+          submitted_at: now,
+          client_event_id: clientEventId,
+          location_geog: locationWkt,
+          accuracy_m: accuracy ?? 0,
+          face_match_score: bestMatchScore || 0.7,
+          liveness_score: 0,
+          face_match_method: 'mediapipe-perceptual-hash',
+          decision: 'accepted',
+          review_state: 'none',
+        });
+
+      if (ceError) throw new Error(ceError.message);
+
+      const { error: updateError } = await supabase
+        .from('attendance_sessions')
+        .update({
+          ended_at: now,
+          status: 'closed',
+          updated_at: now,
+        })
+        .eq('id', currentSession.id)
+        .eq('user_id', currentSession.user_id)
+        .eq('status', 'open');
+
+      if (updateError) throw new Error(updateError.message);
 
       setCurrentSession(null);
       setAutoStatus('idle');
+      lastMatchedUserIdRef.current = null;
+      sessionCheckedUserIdRef.current = null;
       faceLostAtRef.current = null;
+      lastClockOutRef.current = Date.now();
+      stopCamera();
+      setCameraActive(false);
+      setSuccessType('clock_out');
+      setTimeout(() => {
+        setSuccessType(null);
+      }, SUCCESS_DISPLAY_MS);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Auto clock-out failed');
+      setAutoStatus('clocked_in');
     } finally {
       autoInProgressRef.current = false;
     }
-  };
-
-  const handleSignOut = async () => {
-    await supabase.auth.signOut();
-    router.push('/');
   };
 
   if (loading) {
@@ -410,11 +591,11 @@ export default function HomePage() {
           <span className="font-semibold text-sm">FaceAttend</span>
         </div>
         <div className="flex items-center gap-2">
-          {user ? (
+          {authUser ? (
             <>
               <Button variant="ghost" size="sm" asChild><Link href="/app/enroll">Enroll</Link></Button>
-              <Button variant="ghost" size="sm" asChild><Link href="/login">Admin</Link></Button>
-              <Button variant="ghost" size="icon" onClick={handleSignOut}><LogOut className="h-4 w-4" /></Button>
+              <Button variant="ghost" size="sm" asChild><Link href="/admin">Admin</Link></Button>
+              <Button variant="ghost" size="icon" onClick={() => { supabase.auth.signOut(); router.push('/'); }}><LogOut className="h-4 w-4" /></Button>
             </>
           ) : (
             <>
@@ -445,10 +626,29 @@ export default function HomePage() {
         </Card>
       )}
 
+      {successType === 'clock_in' && (
+        <Card className="border-emerald-300 bg-emerald-50 dark:bg-emerald-950/30 transition-all duration-500 scale-100 opacity-100">
+          <CardContent className="py-6 text-center space-y-2">
+            <CheckCircle2 className="h-10 w-10 mx-auto text-emerald-500 animate-bounce" />
+            <p className="text-lg font-bold text-emerald-700 dark:text-emerald-400">Clocked In Successfully!</p>
+            {matchedUser && <p className="text-sm text-muted-foreground">Welcome, {matchedUser.displayName}</p>}
+          </CardContent>
+        </Card>
+      )}
+
+      {successType === 'clock_out' && (
+        <Card className="border-amber-300 bg-amber-50 dark:bg-amber-950/30 transition-all duration-500 scale-100 opacity-100">
+          <CardContent className="py-6 text-center space-y-2">
+            <CheckCircle2 className="h-10 w-10 mx-auto text-amber-500 animate-bounce" />
+            <p className="text-lg font-bold text-amber-700 dark:text-amber-400">Clocked Out Successfully!</p>
+            <p className="text-sm text-muted-foreground">See you next time</p>
+          </CardContent>
+        </Card>
+      )}
+
       <div className="text-center py-2">
         <p className="text-sm text-muted-foreground">{dateStr}</p>
         <p className="text-4xl font-bold tracking-tight">{timeStr}</p>
-        {userName && <p className="text-sm text-muted-foreground mt-1">Welcome, {userName}</p>}
       </div>
 
       {cameraPermission !== 'granted' && (
@@ -473,7 +673,7 @@ export default function HomePage() {
         />
       )}
 
-      <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
+      <div className={`relative aspect-video bg-muted rounded-lg overflow-hidden transition-all duration-700 ${cameraActive ? 'opacity-100 scale-100 mb-4' : 'opacity-0 scale-95 h-0 mb-0 pointer-events-none'}`}>
         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
         {cameraPermission !== 'granted' && (
@@ -497,19 +697,48 @@ export default function HomePage() {
             <span className={`w-1.5 h-1.5 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
             {faceInFrame ? 'Face detected' : 'No face detected'}
           </span>
-          {user && enrolledHash && (
-            <span className={`flex items-center gap-1 ${faceMatched ? 'text-emerald-500' : 'text-muted-foreground'}`}>
-              Match: {(lastMatchScore * 100).toFixed(0)}%
+          {faceInFrame && bestMatchScore > 0 && (
+            <span className={`flex items-center gap-1 ${bestMatchScore >= MATCH_THRESHOLD ? 'text-emerald-500' : 'text-muted-foreground'}`}>
+              {bestMatchScore >= MATCH_THRESHOLD && matchedUser
+                ? `${matchedUser.displayName}: ${(bestMatchScore * 100).toFixed(0)}%`
+                : `Match: ${(bestMatchScore * 100).toFixed(0)}%`}
+              {bestMatchScore < MATCH_THRESHOLD && (
+                <span className="text-[10px] opacity-60"> (need {Math.round(MATCH_THRESHOLD * 100)}%)</span>
+              )}
             </span>
           )}
         </div>
       )}
 
-      {user && !enrolledHash && !currentSession && (
+      {cameraPermission === 'granted' && faceInFrame && bestMatchScore >= 0 && bestMatchScore < MATCH_THRESHOLD && (
+        <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/10">
+          <CardContent className="py-2.5 text-xs">
+            <p className="text-muted-foreground">
+              💡 {exposure === 'dark' ? 'Lighting is too low — move to a brighter area or turn on more lights.' :
+                 exposure === 'bright' ? 'Too much direct light on your face — move away from bright light sources.' :
+                 faceDistance === 'far' ? 'Move closer to the camera so your face fills more of the frame.' :
+                 faceDistance === 'close' ? 'Move slightly back — you are too close to the camera.' :
+                 scanStartRef.current && Date.now() - scanStartRef.current > 8000
+                   ? 'Try lowering your screen brightness — screen light reflecting on your face can reduce match.' :
+                 'Look directly at the camera with your face centered.'}
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {cameraPermission === 'granted' && !faceInFrame && (
+        <Card className="border-amber-200 bg-amber-50/50 dark:bg-amber-950/10">
+          <CardContent className="py-3 text-xs text-muted-foreground">
+            💡 Position your face in the center of the frame with good lighting on your face.
+          </CardContent>
+        </Card>
+      )}
+
+      {enrolledUsers.length === 0 && !loading && (
         <Card>
           <CardContent className="py-6 text-center space-y-3">
-            <p className="text-sm text-muted-foreground">No face enrollment found.</p>
-            <Button size="sm" asChild><Link href="/app/enroll">Enroll Now</Link></Button>
+            <p className="text-sm text-muted-foreground">No employees enrolled yet.</p>
+            <Button size="sm" asChild><Link href={authUser ? '/app/enroll' : '/login?redirect=/app/enroll'}>Enroll Now</Link></Button>
           </CardContent>
         </Card>
       )}
@@ -520,15 +749,47 @@ export default function HomePage() {
         </Card>
       )}
 
-      {autoStatus === 'clocked_in' && (
-        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
-          <CardContent className="py-3 text-sm text-center">
-            <span className="font-medium text-emerald-700 dark:text-emerald-400">Clocked In</span>
-            {!faceInFrame && faceLostAtRef.current && (
-              <span className="text-muted-foreground ml-2">
-                (Auto clock-out in {Math.max(0, Math.ceil((AUTO_CLOCK_OUT_DELAY - (Date.now() - faceLostAtRef.current)) / 1000))}s)
-              </span>
+      {isVerifyingClockOut && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20">
+          <CardContent className="py-6 text-center space-y-3">
+            <p className="text-sm text-amber-700 dark:text-amber-300">Show your face to verify clock-out</p>
+            {faceInFrame && bestMatchScore > 0 && (
+              <p className="text-xs text-muted-foreground">
+                {bestMatchScore >= MATCH_THRESHOLD && matchedUser
+                  ? `Match: ${matchedUser.displayName} (${(bestMatchScore * 100).toFixed(0)}%)`
+                  : `Match: ${(bestMatchScore * 100).toFixed(0)}%`}
+              </p>
             )}
+            <Button variant="ghost" size="sm" onClick={cancelClockOutVerification} className="text-xs">
+              Cancel
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {autoStatus === 'clocked_in' && !cameraActive && currentSession && matchedUser && (
+        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+          <CardContent className="py-6 text-center space-y-3">
+            <CheckCircle2 className="h-8 w-8 mx-auto text-emerald-500" />
+            <p className="font-medium text-emerald-700 dark:text-emerald-400 text-lg">Clocked In</p>
+            <p className="text-sm text-muted-foreground">{matchedUser.displayName}</p>
+            <p className="text-sm text-muted-foreground">{timeStr}</p>
+            <Button variant="outline" size="sm" onClick={startClockOutVerification} className="text-amber-600 border-amber-300 hover:bg-amber-50">
+              <LogOut className="h-4 w-4 mr-2" /> Clock Out
+            </Button>
+          </CardContent>
+        </Card>
+      )}
+
+      {autoStatus === 'clocked_in' && !cameraActive && currentSession && !matchedUser && (
+        <Card className="border-emerald-200 bg-emerald-50 dark:bg-emerald-950/20">
+          <CardContent className="py-6 text-center space-y-3">
+            <CheckCircle2 className="h-8 w-8 mx-auto text-emerald-500" />
+            <p className="font-medium text-emerald-700 dark:text-emerald-400 text-lg">Clocked In</p>
+            <p className="text-sm text-muted-foreground">{timeStr}</p>
+            <Button variant="outline" size="sm" onClick={startClockOutVerification} className="text-amber-600 border-amber-300 hover:bg-amber-50">
+              <LogOut className="h-4 w-4 mr-2" /> Clock Out
+            </Button>
           </CardContent>
         </Card>
       )}
@@ -539,7 +800,7 @@ export default function HomePage() {
         </Card>
       )}
 
-      {autoStatus === 'idle' && user && enrolledHash && faceInFrame && (
+      {autoStatus === 'idle' && faceInFrame && bestMatchScore > 0 && bestMatchScore < MATCH_THRESHOLD && (
         <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
           <CardContent className="py-3 text-sm text-center text-muted-foreground">
             Scanning face...

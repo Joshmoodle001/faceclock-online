@@ -176,6 +176,31 @@ export function computeAverageHash(imageData: ImageData): string {
   return hash;
 }
 
+export function analyzeExposure(imageData: ImageData): 'dark' | 'bright' | 'normal' {
+  const pixels = imageData.data;
+  let darkCount = 0, brightCount = 0, total = 0;
+  for (let i = 0; i < pixels.length; i += 4) {
+    const gray = 0.299 * pixels[i] + 0.587 * pixels[i + 1] + 0.114 * pixels[i + 2];
+    if (gray < 60) darkCount++;
+    else if (gray > 200) brightCount++;
+    total++;
+  }
+  const darkRatio = darkCount / total;
+  const brightRatio = brightCount / total;
+  if (darkRatio > 0.5) return 'dark';
+  if (brightRatio > 0.5) return 'bright';
+  return 'normal';
+}
+
+export function estimateFaceDistance(box: FaceBox, videoW: number, videoH: number): 'far' | 'good' | 'close' {
+  const faceArea = box.width * box.height;
+  const frameArea = videoW * videoH;
+  const ratio = faceArea / frameArea;
+  if (ratio < 0.04) return 'far';
+  if (ratio > 0.35) return 'close';
+  return 'good';
+}
+
 export function hammingDistance(hash1: string, hash2: string): number {
   let dist = 0;
   for (let i = 0; i < hash1.length; i++) {
@@ -189,6 +214,52 @@ export function hashToMatchScore(hash1: string, hash2: string): number {
   if (maxDist === 0) return 0;
   const dist = hammingDistance(hash1, hash2);
   return parseFloat(Math.max(0, Math.min(1, 1 - dist / maxDist)).toFixed(4));
+}
+
+const weightCache = new Map<number, Float64Array>();
+
+function getWeights(hashLength: number): Float64Array {
+  if (weightCache.has(hashLength)) return weightCache.get(hashLength)!;
+  const size = Math.round(Math.sqrt(hashLength));
+  const center = (size - 1) / 2;
+  const sigma = size / 3.5;
+  const weights = new Float64Array(hashLength);
+  for (let i = 0; i < hashLength; i++) {
+    const x = i % size;
+    const y = Math.floor(i / size);
+    const dx = (x - center) / sigma;
+    const dy = (y - center) / sigma;
+    weights[i] = Math.exp(-0.5 * (dx * dx + dy * dy));
+  }
+  weightCache.set(hashLength, weights);
+  return weights;
+}
+
+export function weightedHashToMatchScore(hash1: string, hash2: string): number {
+  const len = hash1.length;
+  if (len === 0) return 0;
+  const weights = getWeights(len);
+  let weightedDist = 0;
+  let totalWeight = 0;
+  for (let i = 0; i < len; i++) {
+    const w = weights[i];
+    totalWeight += w;
+    if (hash1[i] !== hash2[i]) weightedDist += w;
+  }
+  if (totalWeight === 0) return 0;
+  return parseFloat(Math.max(0, Math.min(1, 1 - weightedDist / totalWeight)).toFixed(4));
+}
+
+export function enhanceForLowLight(imageData: ImageData, gamma: number = 0.65): ImageData {
+  const pixels = imageData.data;
+  const out = new Uint8ClampedArray(pixels.length);
+  for (let i = 0; i < pixels.length; i += 4) {
+    out[i] = 255 * Math.pow(pixels[i] / 255, 1 / gamma);
+    out[i + 1] = 255 * Math.pow(pixels[i + 1] / 255, 1 / gamma);
+    out[i + 2] = 255 * Math.pow(pixels[i + 2] / 255, 1 / gamma);
+    out[i + 3] = pixels[i + 3];
+  }
+  return new ImageData(out, imageData.width, imageData.height);
 }
 
 export interface MotionBuffer {
