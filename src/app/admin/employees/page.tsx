@@ -77,15 +77,19 @@ export default function EmployeesPage() {
         if (error) throw error;
         toast.success('Employee updated');
       } else {
-        const { error: signUpError, data } = await supabase.auth.admin.createUser({
-          email: form.email, email_confirm: true, user_metadata: { display_name: form.display_name },
+        const res = await fetch('/api/users', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            email: form.email,
+            displayName: form.display_name,
+            role: form.role,
+            employeeCode: form.employee_code,
+            phone: form.phone,
+          }),
         });
-        if (signUpError) throw signUpError;
-        const { error: profError } = await supabase.from('profiles').insert({
-          user_id: data.user!.id, organization_id: orgId, ...form,
-          employment_status: 'active',
-        });
-        if (profError) throw profError;
+        const result = await res.json();
+        if (!res.ok) throw new Error(result.error || 'Failed to create user');
         toast.success('Employee created');
       }
       setDialogOpen(false);
