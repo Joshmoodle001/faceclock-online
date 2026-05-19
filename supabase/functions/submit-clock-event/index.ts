@@ -20,6 +20,9 @@ interface ClockEventInput {
   liveness_score: number;
   device_fingerprint: string;
   timestamp: string;
+  parent_user_id?: string;
+  drop_off_site_id?: string;
+  drop_off_custom_location?: string;
 }
 
 interface UserProfile {
@@ -316,7 +319,7 @@ serve(async (req: Request): Promise<Response> => {
       final_risk: finalRisk,
     };
 
-    const baseInsert = {
+    const baseInsert: Record<string, unknown> = {
       organization_id: profile.organization_id,
       user_id: user.id,
       site_id: input.site_id,
@@ -340,6 +343,10 @@ serve(async (req: Request): Promise<Response> => {
       final_risk_score: finalRisk,
       server_validation_json: riskScores,
     };
+
+    if (input.parent_user_id) baseInsert.parent_user_id = input.parent_user_id;
+    if (input.drop_off_site_id) baseInsert.drop_off_site_id = input.drop_off_site_id;
+    if (input.drop_off_custom_location) baseInsert.drop_off_custom_location = input.drop_off_custom_location;
 
     if (decision === "accepted") {
       if (input.event_type === "re_clock_in") {

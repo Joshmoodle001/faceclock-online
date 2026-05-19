@@ -16,6 +16,7 @@ import {
   LayoutDashboard, Building2, MapPin, Circle, Users, Camera, Monitor,
   Clock, CalendarCheck, CheckSquare, Map, Wallet, FileText, Settings,
   LogOut, ChevronLeft, ChevronRight, Menu, X, Moon, Sun, Globe, Repeat,
+  GitFork,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import type { Profile, Role } from '@/types';
@@ -42,6 +43,7 @@ const navItems: NavItem[] = [
   { href: '/admin/payroll', label: 'Payroll', icon: Wallet, roles: ['super_admin', 'org_admin', 'finance_admin'] },
   { href: '/admin/launch-actions', label: 'Launch Actions', icon: Globe, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/repeat-clocks', label: 'Repeat Clocks', icon: Repeat, roles: ['super_admin', 'org_admin'] },
+  { href: '/admin/family-trees', label: 'Family Trees', icon: GitFork, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/audit-logs', label: 'Audit Logs', icon: FileText, roles: ['super_admin'] },
   { href: '/admin/settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'org_admin'] },
 ];
