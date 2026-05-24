@@ -16,3 +16,4 @@ coverage/
 .vercel
 supabase/.temp
 .env*.local
+.env.vercel

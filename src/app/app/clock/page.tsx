@@ -15,6 +15,7 @@ import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
 import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, Repeat, Timer, Loader2, Users } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
 import { DropOffDialog } from '@/components/DropOffDialog';
+import { detectFace, captureFaceRegion, computeAverageHash, weightedHashToMatchScore, initFaceDetection } from '@/lib/face';
 import type { ClockEventType, ClockResult, AttendanceSession, RepeatClockRule, Site } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
@@ -35,6 +36,8 @@ export default function ClockPage() {
   const [error, setError] = useState<string | null>(null);
   const [userName, setUserName] = useState('');
   const [orgName, setOrgName] = useState('');
+  const [faceDescriptor, setFaceDescriptor] = useState<string | null>(null);
+  const [mediapipeReady, setMediapipeReady] = useState(false);
   const [currentTime, setCurrentTime] = useState(new Date());
   const [currentSession, setCurrentSession] = useState<AttendanceSession | null>(null);
   const [clockResult, setClockResult] = useState<ClockResult | null>(null);
@@ -59,9 +62,13 @@ export default function ClockPage() {
   const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
   const [familyChildName, setFamilyChildName] = useState('');
   const [sites, setSites] = useState<Site[]>([]);
+  const [faceInFrame, setFaceInFrame] = useState(false);
+  const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const countdownRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const detectionTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -110,7 +117,7 @@ export default function ClockPage() {
 
         const { data: enrollment } = await supabase
           .from('face_enrollments')
-          .select('id, status')
+          .select('id, status, face_descriptor')
           .eq('user_id', user.id)
           .eq('active', true)
           .maybeSingle();
@@ -120,6 +127,10 @@ export default function ClockPage() {
           return;
         }
         setFaceEnrolled(true);
+        if (enrollment.face_descriptor) {
+          const desc = enrollment.face_descriptor as number[];
+          setFaceDescriptor(String.fromCharCode(...desc));
+        }
 
         const { data: userProfile } = await supabase
           .from('profiles')
@@ -164,21 +175,81 @@ export default function ClockPage() {
   }, [router, supabase]);
 
   useEffect(() => {
+    if (!loading) {
+      initFaceDetection().catch(() => {}).finally(() => setMediapipeReady(true));
+    }
+  }, [loading]);
+
+  useEffect(() => {
     if (cameraPermission === 'granted') {
       startCamera();
     }
     return () => { stopCamera(); };
   }, [cameraPermission]);
 
+  const drawFaceBox = (box: { x: number; y: number; width: number; height: number }) => {
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!canvas || !video) return;
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.strokeStyle = '#22c55e';
+    ctx.lineWidth = 3;
+    ctx.strokeRect(box.x, box.y, box.width, box.height);
+  };
+
+  const clearFaceBox = () => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    if (ctx) ctx.clearRect(0, 0, canvas.width, canvas.height);
+  };
+
+  const startDetectionLoop = () => {
+    if (detectionTimerRef.current) clearInterval(detectionTimerRef.current);
+    detectionTimerRef.current = setInterval(async () => {
+      const video = videoRef.current;
+      if (!video || !streamRef.current) return;
+      try {
+        const result = await detectFace(video);
+        if (result) {
+          setFaceInFrame(true);
+          setFaceBox(result.box);
+          drawFaceBox(result.box);
+        } else {
+          setFaceInFrame(false);
+          setFaceBox(null);
+          clearFaceBox();
+        }
+      } catch {
+        setFaceInFrame(false);
+        setFaceBox(null);
+        clearFaceBox();
+      }
+    }, 250);
+  };
+
+  const stopDetectionLoop = () => {
+    if (detectionTimerRef.current) {
+      clearInterval(detectionTimerRef.current);
+      detectionTimerRef.current = null;
+    }
+  };
+
   const startCamera = async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'user' } });
       streamRef.current = stream;
       if (videoRef.current) videoRef.current.srcObject = stream;
+      startDetectionLoop();
     } catch { /* handled by permission state */ }
   };
 
   const stopCamera = () => {
+    stopDetectionLoop();
     if (streamRef.current) {
       streamRef.current.getTracks().forEach(t => t.stop());
       streamRef.current = null;
@@ -421,10 +492,17 @@ export default function ClockPage() {
     setSites((siteData || []) as Site[]);
   };
 
-  const startFamilyClockIn = () => {
-    const frame = captureFrame();
-    if (!frame) return;
-    setFamilyFaceData({ face_match_score: 0.95, liveness_score: 0.92 });
+  const startFamilyClockIn = async () => {
+    const video = videoRef.current;
+    if (!video || !faceDescriptor) return;
+    const result = await detectFace(video);
+    if (!result) return;
+    const region = captureFaceRegion(video, result.box, 64);
+    if (!region) return;
+    const hash = computeAverageHash(region);
+    const matchScore = weightedHashToMatchScore(hash, faceDescriptor);
+    const liveness = 0.85;
+    setFamilyFaceData({ face_match_score: matchScore, liveness_score: liveness });
     setShowFamilyParentDialog(true);
   };
 
@@ -575,7 +653,6 @@ export default function ClockPage() {
           description="We need camera access to verify your identity during clock events."
           actionLabel="Enable Camera"
           onAction={requestCamera}
-          onDismiss={() => {}}
         />
       )}
 
@@ -586,18 +663,24 @@ export default function ClockPage() {
           description="We need your location to verify you are at an authorized attendance site."
           actionLabel="Enable Location"
           onAction={requestLocation}
-          onDismiss={() => {}}
         />
       )}
 
       <div className="relative aspect-video bg-muted rounded-lg overflow-hidden">
-        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
+        <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
+        <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
         {cameraPermission !== 'granted' && (
           <div className="absolute inset-0 flex items-center justify-center">
             <Smartphone className="h-8 w-8 text-muted-foreground" />
           </div>
         )}
       </div>
+      {cameraPermission === 'granted' && (
+        <div className="flex items-center justify-center gap-2 text-sm">
+          <div className={`w-2 h-2 rounded-full ${faceInFrame ? 'bg-emerald-500' : 'bg-amber-500 animate-pulse'}`} />
+          {faceInFrame ? 'Face detected' : 'No face detected'}
+        </div>
+      )}
 
       {position && <GeofenceStatusCard latitude={position.coords.latitude} longitude={position.coords.longitude} accuracy={position.coords.accuracy} />}
 
@@ -621,7 +704,7 @@ export default function ClockPage() {
               size="lg"
               className="w-full h-14 text-base font-bold bg-amber-600 hover:bg-amber-700"
               onClick={handleReclock}
-              disabled={isSubmitting || cameraPermission !== 'granted'}
+              disabled={isSubmitting || cameraPermission !== 'granted' || locationPermission !== 'granted'}
             >
               {isSubmitting ? (
                 <Loader2 className="h-5 w-5 animate-spin mr-2" />
@@ -638,7 +721,7 @@ export default function ClockPage() {
         <ClockActionButton
           isClockedIn={!!currentSession}
           onClick={(type) => handleClockAction(type)}
-          disabled={isSubmitting || cameraPermission !== 'granted'}
+          disabled={isSubmitting || cameraPermission !== 'granted' || locationPermission !== 'granted'}
           loading={isSubmitting}
         />
         {!currentSession && familyTrees.length > 0 && !isSubmitting && (
@@ -646,7 +729,7 @@ export default function ClockPage() {
             variant="outline"
             className="w-full h-14 text-base font-semibold border-primary/30 text-primary hover:bg-primary/5"
             onClick={startFamilyClockIn}
-            disabled={cameraPermission !== 'granted'}
+            disabled={cameraPermission !== 'granted' || locationPermission !== 'granted'}
           >
             <Users className="h-5 w-5 mr-2" />
             Family Clock-In

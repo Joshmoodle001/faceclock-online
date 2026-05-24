@@ -80,11 +80,12 @@ export async function registerWebAuthnCredential(
 
 export async function authenticateWebAuthn(credentialId: string): Promise<boolean> {
   try {
+    const idBytes = Uint8Array.from(atob(credentialId), c => c.charCodeAt(0));
     const assertion = await navigator.credentials.get({
       publicKey: {
         challenge: crypto.getRandomValues(new Uint8Array(32)),
         allowCredentials: [
-          { id: new Uint8Array(credentialId.length), type: 'public-key' },
+          { id: idBytes, type: 'public-key' },
         ],
         timeout: 60000,
       },

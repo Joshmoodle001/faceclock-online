@@ -83,6 +83,8 @@ export default function HomePage() {
   const [successType, setSuccessType] = useState<'clock_in' | 'clock_out' | null>(null);
   const clockOutVerificationRef = useRef<'idle' | 'awaiting_face'>('idle');
   const [isVerifyingClockOut, setIsVerifyingClockOut] = useState(false);
+  const [clockOutCountdown, setClockOutCountdown] = useState<number | null>(null);
+  const countdownTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     const t = setInterval(() => setCurrentTime(new Date()), 1000);
@@ -355,11 +357,34 @@ export default function HomePage() {
   useEffect(() => {
     if (faceLostAtRef.current && currentSession && autoStatus === 'clocked_in' && !autoInProgressRef.current && clockOutVerificationRef.current !== 'awaiting_face') {
       const elapsed = Date.now() - faceLostAtRef.current;
+      const remaining = Math.max(0, Math.ceil((AUTO_CLOCK_OUT_DELAY - elapsed) / 1000));
+      setClockOutCountdown(remaining);
       if (elapsed > AUTO_CLOCK_OUT_DELAY) {
         triggerAutoClockOut();
+        setClockOutCountdown(null);
       }
+    } else {
+      setClockOutCountdown(null);
     }
   }, [faceInFrame, currentSession, autoStatus]);
+
+  useEffect(() => {
+    if (clockOutCountdown !== null && clockOutCountdown > 0) {
+      countdownTimerRef.current = setInterval(() => {
+        if (faceLostAtRef.current) {
+          const elapsed = Date.now() - faceLostAtRef.current;
+          const remaining = Math.max(0, Math.ceil((AUTO_CLOCK_OUT_DELAY - elapsed) / 1000));
+          if (remaining <= 0) {
+            setClockOutCountdown(null);
+            if (countdownTimerRef.current) clearInterval(countdownTimerRef.current);
+          } else {
+            setClockOutCountdown(remaining);
+          }
+        }
+      }, 1000);
+      return () => { if (countdownTimerRef.current) clearInterval(countdownTimerRef.current); };
+    }
+  }, [clockOutCountdown]);
 
   const requestCamera = async () => {
     try {
@@ -658,7 +683,6 @@ export default function HomePage() {
           description="We need camera access to verify your identity during clock events."
           actionLabel="Enable Camera"
           onAction={requestCamera}
-          onDismiss={() => {}}
         />
       )}
 
@@ -669,7 +693,6 @@ export default function HomePage() {
           description="We need your location to verify you are at an authorized attendance site."
           actionLabel="Enable Location"
           onAction={requestLocation}
-          onDismiss={() => {}}
         />
       )}
 
@@ -804,6 +827,15 @@ export default function HomePage() {
         <Card className="border-blue-200 bg-blue-50 dark:bg-blue-950/20">
           <CardContent className="py-3 text-sm text-center text-muted-foreground">
             Scanning face...
+          </CardContent>
+        </Card>
+      )}
+
+      {clockOutCountdown !== null && clockOutCountdown > 0 && clockOutCountdown <= 10 && (
+        <Card className="border-amber-200 bg-amber-50 dark:bg-amber-950/20 animate-pulse">
+          <CardContent className="flex items-center gap-3 py-3 text-sm">
+            <AlertCircle className="h-4 w-4 text-amber-600 shrink-0" />
+            <span>Face not detected — auto clock-out in <strong>{clockOutCountdown}s</strong></span>
           </CardContent>
         </Card>
       )}

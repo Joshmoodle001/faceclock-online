@@ -99,11 +99,18 @@ export default function EnrollPage() {
     await video.play();
     setCameraReady(true);
 
-    const detect = async () => {
+    let lastDetect = 0;
+    const DETECT_INTERVAL = 250;
+    const detect = async (time: number) => {
       if (livenessStopRef.current || !video || video.readyState < 2) {
         animRef.current = requestAnimationFrame(detect);
         return;
       }
+      if (time - lastDetect < DETECT_INTERVAL) {
+        animRef.current = requestAnimationFrame(detect);
+        return;
+      }
+      lastDetect = time;
       try {
         const result = await detectFace(video);
         setFaceInFrame(!!result);
@@ -379,7 +386,6 @@ export default function EnrollPage() {
                   const s = await startCamera();
                   if (s && mediapipeReady) startDetectionLoop();
                 }}
-                onDismiss={() => router.push('/app/clock')}
               />
             ) : cameraPermission === false ? (
               <div className="text-center space-y-2">
