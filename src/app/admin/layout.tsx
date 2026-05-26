@@ -19,6 +19,7 @@ import {
   GitFork,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
+import { MapPanel } from '@/components/MapPanel';
 import type { Profile, Role } from '@/types';
 
 interface NavItem {
@@ -207,7 +208,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           <span className="font-bold">FaceAttend</span>
           <div className="w-10" />
         </header>
-        <main className="flex-1">{children}</main>
+        <main className="flex-1 flex flex-col">
+          <div className="flex-1">{children}</div>
+          <MapPanel />
+        </main>
       </div>
     </div>
   );

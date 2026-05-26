@@ -59,7 +59,7 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
       container: containerRef.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [28.0473, -26.2041],
-      zoom: 10,
+      zoom: 13,
     });
 
     map.addControl(new maplibregl.NavigationControl(), 'top-right');
@@ -181,7 +181,7 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
     });
 
     if (!bounds.isEmpty()) {
-      map.fitBounds(bounds, { padding: 50, maxZoom: 15 });
+      map.fitBounds(bounds, { padding: 50, maxZoom: 17 });
     }
   }, [employees, geofences, sites, onMarkerClick]);
 
