@@ -23,7 +23,7 @@ export interface Device { id: string; organization_id: string; user_id: string; 
 
 export interface FaceEnrollment { id: string; organization_id: string; user_id: string; model_name: string; model_version: string; quality_score: number; liveness_score: number; face_descriptor?: number[]; status: EnrollmentStatus; active: boolean; reviewed_by?: string; reviewed_at?: string; created_at: string; }
 
-export interface ClockEvent { id: string; organization_id: string; user_id: string; site_id?: string; geofence_id?: string; device_id?: string; event_type: ClockEventType; occurred_at: string; submitted_at: string; client_event_id: string; latitude?: number; longitude?: number; accuracy_m?: number; within_geofence?: boolean; distance_from_geofence_m?: number; face_match_score?: number; liveness_score?: number; location_risk_score?: number; device_risk_score?: number; final_risk_score?: number; decision: ClockDecision; review_state: ReviewState; review_reason?: string; drop_off_site_id?: string; drop_off_custom_location?: string; parent_user_id?: string; created_at: string; }
+export interface ClockEvent { id: string; organization_id: string; user_id: string; site_id?: string; geofence_id?: string; device_id?: string; event_type: ClockEventType; occurred_at: string; submitted_at: string; client_event_id: string; latitude?: number; longitude?: number; accuracy_m?: number; within_geofence?: boolean; distance_from_geofence_m?: number; face_match_score?: number; liveness_score?: number; location_risk_score?: number; device_risk_score?: number; final_risk_score?: number; decision: ClockDecision; review_state: ReviewState; review_reason?: string; created_at: string; }
 
 export interface AttendanceSession { id: string; organization_id: string; user_id: string; site_id?: string; opened_by_event_id?: string; closed_by_event_id?: string; started_at: string; ended_at?: string; worked_minutes_raw?: number; break_minutes: number; overtime_minutes: number; payable_minutes?: number; status: AttendanceSessionStatus; approved_by?: string; approved_at?: string; created_at: string; updated_at: string; }
 
@@ -68,21 +68,6 @@ export interface RepeatClockAssignment {
   created_at: string;
 }
 
-export interface FamilyTree {
-  id: string;
-  organization_id: string;
-  name: string;
-  parent_user_id: string;
-  created_at: string;
-}
-
-export interface FamilyTreeChild {
-  id: string;
-  family_tree_id: string;
-  child_user_id: string;
-  created_at: string;
-}
-
 export interface DeviceInfo {
   fingerprint: string;
   platform?: string;
@@ -107,8 +92,6 @@ export const tables = {
   geofence_assignments: 'geofence_assignments',
   repeat_clock_rules: 'repeat_clock_rules',
   user_repeat_clock_assignments: 'user_repeat_clock_assignments',
-  family_trees: 'family_trees',
-  family_tree_children: 'family_tree_children',
 } as const;
 
 export type Tables = keyof typeof tables;

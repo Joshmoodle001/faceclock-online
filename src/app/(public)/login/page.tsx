@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -23,7 +23,8 @@ export default function LoginPage() {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [isGoogleLoading, setIsGoogleLoading] = useState(false);
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
 
   const { register, handleSubmit, formState: { errors, isSubmitting } } = useForm<LoginData>({
     resolver: zodResolver(loginSchema),
@@ -36,31 +37,39 @@ export default function LoginPage() {
 
   const onSubmit = async (data: LoginData) => {
     setError(null);
-    const { error: signInError } = await supabase.auth.signInWithPassword({
-      email: data.email,
-      password: data.password,
-    });
-    if (signInError) {
-      setError(signInError.message);
-      return;
+    try {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email: data.email,
+        password: data.password,
+      });
+      if (signInError) {
+        setError(signInError.message);
+        return;
+      }
+      router.refresh();
+      const redirectTo = getRedirect();
+      if (redirectTo) { router.push(redirectTo); return; }
+      await redirectByRole();
+    } catch {
+      setError('An unexpected error occurred. Please try again.');
     }
-    const redirectTo = getRedirect();
-    if (redirectTo) { router.push(redirectTo); return; }
-    await redirectByRole();
   };
 
   const redirectByRole = async () => {
-    const { data: { user } } = await supabase.auth.getUser();
-    if (!user) { router.push('/login'); return; }
-    const { data: profile, error } = await supabase
-      .from('profiles')
-      .select('role')
-      .eq('user_id', user.id)
-      .maybeSingle();
-    if (profile?.role === 'employee') router.push('/app/clock');
-    else if (profile?.role === 'super_admin' || profile?.role === 'org_admin' || profile?.role === 'manager') router.push('/admin/dashboard');
-    else if (profile?.role) router.push('/admin/dashboard');
-    else router.push('/app/clock');
+    try {
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) { router.push('/login'); return; }
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('role')
+        .eq('user_id', user.id)
+        .maybeSingle();
+      if (profile?.role === 'employee') router.push('/app/clock');
+      else if (profile) router.push('/admin/dashboard');
+      else router.push('/app/clock');
+    } catch {
+      router.push('/app/clock');
+    }
   };
 
   const signInWithGoogle = async () => {

@@ -12,11 +12,10 @@ import { OfflineQueueStatus } from '@/components/OfflineQueueStatus';
 import { ClockActionButton } from '@/components/ClockActionButton';
 import { ClockResultCard } from '@/components/ClockResultCard';
 import { GeofenceStatusCard } from '@/components/GeofenceStatusCard';
-import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, Repeat, Timer, Loader2, Users } from 'lucide-react';
+import { Camera, MapPin, WifiOff, AlertCircle, Smartphone, Repeat, Timer, Loader2 } from 'lucide-react';
 import { generateClientId } from '@/lib/utils';
-import { DropOffDialog } from '@/components/DropOffDialog';
 import { detectFace, captureFaceRegion, computeAverageHash, weightedHashToMatchScore, initFaceDetection } from '@/lib/face';
-import type { ClockEventType, ClockResult, AttendanceSession, RepeatClockRule, Site } from '@/types';
+import type { ClockEventType, ClockResult, AttendanceSession, RepeatClockRule } from '@/types';
 
 const OFFLINE_QUEUE_KEY = 'faceattend_offline_queue';
 
@@ -55,13 +54,6 @@ export default function ClockPage() {
   const [reclockIntervalSec, setReclockIntervalSec] = useState(0);
   const [isReclocking, setIsReclocking] = useState(false);
 
-  const [familyTrees, setFamilyTrees] = useState<{ tree_id: string; parent_user_id: string; parent_name: string; tree_name: string }[]>([]);
-  const [showFamilyParentDialog, setShowFamilyParentDialog] = useState(false);
-  const [showDropOff, setShowDropOff] = useState(false);
-  const [familyFaceData, setFamilyFaceData] = useState<{ face_match_score: number; liveness_score: number } | null>(null);
-  const [selectedParentId, setSelectedParentId] = useState<string | null>(null);
-  const [familyChildName, setFamilyChildName] = useState('');
-  const [sites, setSites] = useState<Site[]>([]);
   const [faceInFrame, setFaceInFrame] = useState(false);
   const [faceBox, setFaceBox] = useState<{ x: number; y: number; width: number; height: number } | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -130,15 +122,6 @@ export default function ClockPage() {
         if (enrollment.face_descriptor) {
           const desc = enrollment.face_descriptor as number[];
           setFaceDescriptor(String.fromCharCode(...desc));
-        }
-
-        const { data: userProfile } = await supabase
-          .from('profiles')
-          .select('organization_id')
-          .eq('user_id', user.id)
-          .single();
-        if (userProfile) {
-          setupFamilyFlow(userProfile.organization_id, user.id);
         }
 
         const { data: session } = await supabase
@@ -446,133 +429,6 @@ export default function ClockPage() {
     }
   };
 
-  const setupFamilyFlow = async (orgId: string, userId: string) => {
-    const { data: myTrees } = await supabase
-      .from('family_tree_children')
-      .select('family_tree_id')
-      .eq('child_user_id', userId);
-    if (!myTrees || myTrees.length === 0) return;
-
-    const treeIds = myTrees.map(t => t.family_tree_id);
-    const { data: trees } = await supabase
-      .from('family_trees')
-      .select('id, name, parent_user_id')
-      .in('id', treeIds);
-    if (!trees || trees.length === 0) return;
-
-    const parentIds = trees.map(t => t.parent_user_id);
-    const { data: parents } = await supabase
-      .from('profiles')
-      .select('user_id, display_name')
-      .in('user_id', parentIds);
-    const parentMap = new Map((parents || []).map(p => [p.user_id, p.display_name]));
-
-    setFamilyTrees(
-      trees.map(t => ({
-        tree_id: t.id,
-        parent_user_id: t.parent_user_id,
-        parent_name: parentMap.get(t.parent_user_id) || 'Unknown',
-        tree_name: t.name,
-      }))
-    );
-
-    const { data: userProf } = await supabase
-      .from('profiles')
-      .select('display_name')
-      .eq('user_id', userId)
-      .single();
-    if (userProf) setFamilyChildName(userProf.display_name);
-
-    const { data: siteData } = await supabase
-      .from('sites')
-      .select('id, name')
-      .eq('organization_id', orgId)
-      .eq('active', true)
-      .order('name');
-    setSites((siteData || []) as Site[]);
-  };
-
-  const startFamilyClockIn = async () => {
-    const video = videoRef.current;
-    if (!video || !faceDescriptor) return;
-    const result = await detectFace(video);
-    if (!result) return;
-    const region = captureFaceRegion(video, result.box, 64);
-    if (!region) return;
-    const hash = computeAverageHash(region);
-    const matchScore = weightedHashToMatchScore(hash, faceDescriptor);
-    const liveness = 0.85;
-    setFamilyFaceData({ face_match_score: matchScore, liveness_score: liveness });
-    setShowFamilyParentDialog(true);
-  };
-
-  const handleFamilyParentSelected = (parentId: string) => {
-    setSelectedParentId(parentId);
-    setShowFamilyParentDialog(false);
-    setShowDropOff(true);
-  };
-
-  const handleFamilyDropOff = async (siteId: string | null, customLocation: string | null) => {
-    setShowDropOff(false);
-    if (!selectedParentId || !familyFaceData) return;
-
-    setIsSubmitting(true);
-    setClockResult(null);
-    setError(null);
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Not authenticated');
-
-      const clientEventId = generateClientId();
-      const payload: Record<string, unknown> = {
-        event_type: 'clock_in',
-        occurred_at: new Date().toISOString(),
-        client_event_id: clientEventId,
-        face_match_score: familyFaceData.face_match_score,
-        liveness_score: familyFaceData.liveness_score,
-        device_fingerprint: deviceFingerprint,
-        timestamp: new Date().toISOString(),
-        parent_user_id: selectedParentId,
-      };
-
-      if (siteId) { payload.drop_off_site_id = siteId; payload.site_id = siteId; }
-      if (customLocation) payload.drop_off_custom_location = customLocation;
-
-      if (locationPermission === 'granted') {
-        try {
-          const pos = await getLocation();
-          payload.latitude = pos.coords.latitude;
-          payload.longitude = pos.coords.longitude;
-          payload.accuracy_m = pos.coords.accuracy;
-        } catch { /* location unavailable */ }
-      }
-      if (payload.latitude === undefined) { payload.latitude = 0; payload.longitude = 0; payload.accuracy_m = 9999; }
-
-      const { data, error: fnError } = await supabase.functions.invoke('submit-clock-event', { body: payload });
-      if (fnError) throw new Error(fnError.message);
-
-      const result = data as ClockResult;
-      setClockResult(result);
-
-      if (result.decision === 'accepted') {
-        setCurrentSession(result.session || null);
-        const interval = await fetchRepeatRules();
-        if (interval !== null) startReclockCountdown(interval);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Family clock-in failed');
-    } finally {
-      setIsSubmitting(false);
-      setFamilyFaceData(null);
-      setSelectedParentId(null);
-    }
-  };
-
-  const handleFamilySkipDropOff = async () => {
-    await handleFamilyDropOff(null, null);
-  };
-
   const handleReclock = async () => {
     setIsReclocking(true);
     try {
@@ -724,17 +580,6 @@ export default function ClockPage() {
           disabled={isSubmitting || cameraPermission !== 'granted' || locationPermission !== 'granted'}
           loading={isSubmitting}
         />
-        {!currentSession && familyTrees.length > 0 && !isSubmitting && (
-          <Button
-            variant="outline"
-            className="w-full h-14 text-base font-semibold border-primary/30 text-primary hover:bg-primary/5"
-            onClick={startFamilyClockIn}
-            disabled={cameraPermission !== 'granted' || locationPermission !== 'granted'}
-          >
-            <Users className="h-5 w-5 mr-2" />
-            Family Clock-In
-          </Button>
-        )}
         {currentSession && !isSubmitting && !reclockRequired && (
           <Button variant="outline" className="w-full" onClick={() => handleClockAction('break_start')}>
             Start Break
@@ -748,46 +593,6 @@ export default function ClockPage() {
       </div>
 
       {clockResult && <ClockResultCard result={clockResult} />}
-
-      {showFamilyParentDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-          <Card className="w-full max-w-sm">
-            <CardContent className="pt-6 space-y-4">
-              <div className="text-center">
-                <Users className="h-8 w-8 mx-auto text-primary mb-2" />
-                <h2 className="text-lg font-semibold">Who dropped you off?</h2>
-                <p className="text-sm text-muted-foreground">Select the parent or guardian who brought you today.</p>
-              </div>
-              <div className="space-y-2">
-                {familyTrees.map((ft) => (
-                  <Button
-                    key={ft.tree_id}
-                    variant="outline"
-                    className="w-full justify-start h-auto py-3"
-                    onClick={() => handleFamilyParentSelected(ft.parent_user_id)}
-                  >
-                    <div className="text-left">
-                      <p className="font-medium">{ft.parent_name}</p>
-                      <p className="text-xs text-muted-foreground">{ft.tree_name}</p>
-                    </div>
-                  </Button>
-                ))}
-              </div>
-              <Button variant="ghost" className="w-full" onClick={() => { setShowFamilyParentDialog(false); setFamilyFaceData(null); }}>
-                Cancel
-              </Button>
-            </CardContent>
-          </Card>
-        </div>
-      )}
-
-      <DropOffDialog
-        open={showDropOff}
-        childName={familyChildName}
-        sites={sites.map(s => ({ id: s.id, name: s.name }))}
-        onConfirm={handleFamilyDropOff}
-        onCancel={handleFamilySkipDropOff}
-      />
     </div>
   );
 }

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import Link from 'next/link';
 import { createClient } from '@/lib/supabase/client';
@@ -16,7 +16,6 @@ import {
   LayoutDashboard, Building2, MapPin, Circle, Users, Camera, Monitor,
   Clock, CalendarCheck, CheckSquare, Map, Wallet, FileText, Settings,
   LogOut, ChevronLeft, ChevronRight, Menu, X, Moon, Sun, Globe, Repeat,
-  GitFork,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
 import type { Profile, Role } from '@/types';
@@ -43,7 +42,6 @@ const navItems: NavItem[] = [
   { href: '/admin/payroll', label: 'Payroll', icon: Wallet, roles: ['super_admin', 'org_admin', 'finance_admin'] },
   { href: '/admin/launch-actions', label: 'Launch Actions', icon: Globe, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/repeat-clocks', label: 'Repeat Clocks', icon: Repeat, roles: ['super_admin', 'org_admin'] },
-  { href: '/admin/family-trees', label: 'Family Trees', icon: GitFork, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/audit-logs', label: 'Audit Logs', icon: FileText, roles: ['super_admin'] },
   { href: '/admin/settings', label: 'Settings', icon: Settings, roles: ['super_admin', 'org_admin'] },
 ];
@@ -56,20 +54,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
-  const supabase = createClient();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const { theme, setTheme } = useTheme();
 
   useEffect(() => {
     const init = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) { router.push('/login'); return; }
-      const { data, error } = await supabase
-        .from('profiles')
-        .select('*')
-        .eq('user_id', user.id)
-        .maybeSingle();
-      if (error) { router.push('/login'); return; }
-      if (data) {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { router.push('/login'); return; }
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('*')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (error) { router.push('/login'); return; }
+        if (!data) { router.push('/login'); return; }
         setProfile(data as Profile);
         if (data.organization_id) {
           const { data: org } = await supabase
@@ -80,11 +80,14 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
           if (org) setOrgName(org.name);
         }
         if (data.role === 'employee') { router.push('/app/clock'); return; }
+      } catch {
+        router.push('/login');
+        return;
       }
       setLoading(false);
     };
     init();
-  }, [router, supabase]);
+  }, [router]);
 
   const handleSignOut = async () => {
     await supabase.auth.signOut();

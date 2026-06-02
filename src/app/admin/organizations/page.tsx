@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import { createClient } from '@/lib/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
@@ -25,17 +26,37 @@ import type { Organization } from '@/types';
 import { toast } from 'sonner';
 
 export default function OrganizationsPage() {
-  const supabase = createClient();
+  const router = useRouter();
+  const supabaseRef = useRef(createClient());
+  const supabase = supabaseRef.current;
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editing, setEditing] = useState<Organization | null>(null);
-  const [form, setForm] = useState({ name: '', slug: '', default_timezone: 'Africa/Johannesburg', currency: 'ZAR', status: 'active' });
-  const [adminForm, setAdminForm] = useState({ email: '', displayName: '', password: '' });
-  const [saving, setSaving] = useState(false);
 
-  useEffect(() => { loadOrgs(); }, [search]);
+  useEffect(() => {
+    const init = async () => {
+      try {
+        const { data: { user } } = await supabase.auth.getUser();
+        if (!user) { router.push('/login'); return; }
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('role')
+          .eq('user_id', user.id)
+          .maybeSingle();
+        if (!profile || profile.role !== 'super_admin') { router.push('/admin/dashboard'); return; }
+      } catch {
+        router.push('/login');
+        return;
+      }
+      setLoading(false);
+      loadOrgs();
+    };
+    init();
+  }, []);
+
+  useEffect(() => {
+    if (!loading) loadOrgs();
+  }, [search]);
 
   const loadOrgs = async () => {
     let query = supabase.from('organizations').select('*').order('name');
