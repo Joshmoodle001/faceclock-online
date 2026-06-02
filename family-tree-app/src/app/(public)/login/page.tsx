@@ -64,7 +64,7 @@ export default function LoginPage() {
         .eq('user_id', user.id)
         .maybeSingle();
       if (profile?.role === 'employee') router.push('/app/clock');
-      else if (profile) router.push('/admin/dashboard');
+      else if (profile) router.push('/admin');
       else router.push('/app/clock');
     } catch {
       router.push('/app/clock');
