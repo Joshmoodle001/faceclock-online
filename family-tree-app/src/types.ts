@@ -40,7 +40,10 @@ export interface Site {
 export interface Profile {
   user_id: string;
   display_name: string;
-  organization_id: string;
+  organization_id?: string;
+  email?: string;
+  employee_code?: string;
+  role?: string;
 }
 
 export const tables = {
