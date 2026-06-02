@@ -46,7 +46,6 @@ export default function LoginPage() {
         setError(signInError.message);
         return;
       }
-      router.refresh();
       const redirectTo = getRedirect();
       if (redirectTo) { router.push(redirectTo); return; }
       await redirectByRole();

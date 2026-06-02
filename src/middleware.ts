@@ -49,7 +49,7 @@ export async function middleware(request: NextRequest) {
 
   if (user && path === "/login") {
     const url = request.nextUrl.clone();
-    url.pathname = "/app";
+    url.pathname = "/app/clock";
     return NextResponse.redirect(url);
   }
 
