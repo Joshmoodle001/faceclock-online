@@ -1,7 +1,7 @@
 'use client';
 
-import { Card, CardContent } from '@/components/ui';
-import { Button } from '@/components/ui';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
 
 interface PermissionPromptProps {
   icon: React.ReactNode;

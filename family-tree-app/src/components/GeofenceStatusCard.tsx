@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { MapPin, CheckCircle2, XCircle } from 'lucide-react';
-import { Card, CardContent } from '@/components/ui';
-import { Badge } from '@/components/ui';
+import { MapPin, CheckCircle2, AlertTriangle, XCircle } from 'lucide-react';
+import { Card, CardContent } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
 
 interface GeofenceStatusCardProps {
   latitude: number;
@@ -70,7 +70,7 @@ export function GeofenceStatusCard({
                     : `Outside geofence (${distance.toFixed(1)}m from boundary)`}
                 </p>
                 <div className="flex items-center gap-2 mt-1">
-                  <Badge variant={within ? 'success' : 'secondary'} className={within ? '' : 'bg-red-100 text-red-700'}>
+                  <Badge variant={within ? 'success' : 'destructive'}>
                     {within ? 'Inside' : 'Outside'}
                   </Badge>
                   <span className="text-xs text-muted-foreground">

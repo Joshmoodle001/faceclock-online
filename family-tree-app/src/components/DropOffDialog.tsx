@@ -1,4 +1,17 @@
+'use client';
+
 import { useState } from 'react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { MapPin, Type } from 'lucide-react';
 
 interface SiteOption {
   id: string;
@@ -18,8 +31,6 @@ export function DropOffDialog({ open, childName, sites, onConfirm, onCancel }: D
   const [selectedSiteId, setSelectedSiteId] = useState('');
   const [customLocation, setCustomLocation] = useState('');
 
-  if (!open) return null;
-
   const handleConfirm = () => {
     if (mode === 'select' && selectedSiteId) {
       onConfirm(selectedSiteId, null);
@@ -29,72 +40,63 @@ export function DropOffDialog({ open, childName, sites, onConfirm, onCancel }: D
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="fixed inset-0 bg-black/50" onClick={onCancel} />
-      <div className="relative bg-white rounded-lg shadow-xl max-w-md w-full mx-4 p-6 space-y-4">
-        <div>
-          <h2 className="text-lg font-semibold">Drop-Off Location</h2>
-          <p className="text-sm text-gray-500">
+    <Dialog open={open} onOpenChange={() => {}}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Drop-Off Location</DialogTitle>
+          <DialogDescription>
             Where are we dropping off <strong>{childName}</strong>?
-          </p>
-        </div>
+          </DialogDescription>
+        </DialogHeader>
 
         <div className="space-y-4">
           {mode === 'select' ? (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Select a Site</label>
+              <Label>Select a Site</Label>
               <div className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-gray-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
-                <select
-                  value={selectedSiteId}
-                  onChange={(e) => setSelectedSiteId(e.target.value)}
-                  className="flex-1 border rounded-md px-3 py-2 text-sm bg-white"
-                >
-                  <option value="">Search or select a site...</option>
-                  {sites.map((site) => (
-                    <option key={site.id} value={site.id}>{site.name}</option>
-                  ))}
-                </select>
+                <MapPin className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Select value={selectedSiteId} onValueChange={setSelectedSiteId}>
+                  <SelectTrigger className="flex-1">
+                    <SelectValue placeholder="Search or select a site..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {sites.map((site) => (
+                      <SelectItem key={site.id} value={site.id}>{site.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-              <button
-                onClick={() => setMode('manual')}
-                className="text-blue-600 text-xs hover:underline"
-              >
-                Can&apos;t find it — type the store name instead
-              </button>
+              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setMode('manual')}>
+                {`Can't find it — type the store name instead`}
+              </Button>
             </div>
           ) : (
             <div className="space-y-2">
-              <label className="text-sm font-medium">Store Name</label>
+              <Label>Store Name</Label>
               <div className="flex items-center gap-2">
-                <svg className="h-4 w-4 text-gray-400 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="4 7 4 4 20 4 20 7"/><line x1="9" y1="20" x2="15" y2="20"/><line x1="12" y1="4" x2="12" y2="20"/></svg>
-                <input
-                  type="text"
+                <Type className="h-4 w-4 text-muted-foreground shrink-0" />
+                <Input
                   placeholder="Enter store name..."
                   value={customLocation}
                   onChange={(e) => setCustomLocation(e.target.value)}
-                  className="flex-1 border rounded-md px-3 py-2 text-sm"
+                  className="flex-1"
                   autoFocus
                 />
               </div>
-              <button onClick={() => setMode('select')} className="text-blue-600 text-xs hover:underline">
+              <Button variant="link" size="sm" className="h-auto p-0 text-xs" onClick={() => setMode('select')}>
                 Back to site selection
-              </button>
+              </Button>
             </div>
           )}
         </div>
 
-        <div className="flex justify-end gap-2 pt-2">
-          <button onClick={onCancel} className="px-4 py-2 border rounded-md text-sm hover:bg-gray-50">Skip</button>
-          <button
-            onClick={handleConfirm}
-            disabled={mode === 'select' ? !selectedSiteId : !customLocation.trim()}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 disabled:opacity-50"
-          >
+        <DialogFooter>
+          <Button variant="outline" onClick={onCancel}>Skip</Button>
+          <Button onClick={handleConfirm} disabled={mode === 'select' ? !selectedSiteId : !customLocation.trim()}>
             Confirm
-          </button>
-        </div>
-      </div>
-    </div>
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

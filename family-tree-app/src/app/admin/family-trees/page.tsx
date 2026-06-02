@@ -1,23 +1,52 @@
 'use client';
 
-import { useEffect, useState, useRef } from 'react';
+import { useEffect, useState } from 'react';
 import { createClient } from '@/lib/supabase/client';
-import { FamilyTreeOrganogram } from '@/components/FamilyTreeOrganogram';
+import { Card, CardContent } from '@/components/ui/card';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Badge } from '@/components/ui/badge';
+import { Skeleton } from '@/components/ui/skeleton';
 import {
-  Button, Card, CardContent, Input, Label, Badge, Skeleton,
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
-  Dialog, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
-  Checkbox, ScrollArea,
-} from '@/components/ui';
-import type { FamilyTree, FamilyTreeChild, Profile } from '@/types';
+} from '@/components/ui/table';
+import {
+  Dialog, DialogContent, DialogDescription, DialogFooter,
+  DialogHeader, DialogTitle,
+} from '@/components/ui/dialog';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Checkbox } from '@/components/ui/checkbox';
+import { Plus, Trash2, Users, GitFork, Loader2, Eye } from 'lucide-react';
+import { toast } from 'sonner';
+import { FamilyTreeOrganogram } from '@/components/FamilyTreeOrganogram';
+import type { Profile } from '@/types';
+
+interface FamilyTree {
+  id: string;
+  organization_id: string;
+  name: string;
+  parent_user_id: string;
+  created_at: string;
+}
+
+interface FamilyTreeChild {
+  id: string;
+  family_tree_id: string;
+  child_user_id: string;
+  created_at: string;
+}
 
 export default function FamilyTreesPage() {
-  const supabaseRef = useRef(createClient());
-  const supabase = supabaseRef.current;
+  const supabase = createClient();
   const [trees, setTrees] = useState<FamilyTree[]>([]);
   const [loading, setLoading] = useState(true);
   const [orgId, setOrgId] = useState<string | null>(null);
   const [role, setRole] = useState<string | null>(null);
+  const [profileId, setProfileId] = useState<string | null>(null);
   const isSuper = role === 'super_admin';
 
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -42,6 +71,7 @@ export default function FamilyTreesPage() {
     const init = async () => {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+      setProfileId(user.id);
       const { data: prof } = await supabase.from('profiles').select('organization_id, role').eq('user_id', user.id).single();
       if (prof) { setOrgId(prof.organization_id); setRole(prof.role); }
     };
@@ -59,16 +89,6 @@ export default function FamilyTreesPage() {
     setLoading(false);
   };
 
-  const loadEmployees = async () => {
-    if (!orgId) return;
-    const { data } = await supabase
-      .from('profiles')
-      .select('user_id, display_name, email, employee_code, role')
-      .eq('organization_id', orgId)
-      .order('display_name');
-    setEmployees((data || []) as Profile[]);
-  };
-
   const openCreate = () => {
     setEditing(null);
     setForm({ name: '', parent_user_id: '' });
@@ -83,6 +103,16 @@ export default function FamilyTreesPage() {
     setDialogOpen(true);
   };
 
+  const loadEmployees = async () => {
+    if (!orgId) return;
+    const { data } = await supabase
+      .from('profiles')
+      .select('user_id, display_name, email, employee_code, role')
+      .eq('organization_id', orgId)
+      .order('display_name');
+    setEmployees((data || []) as Profile[]);
+  };
+
   const handleSave = async () => {
     if (!orgId) return;
     setSaving(true);
@@ -90,20 +120,25 @@ export default function FamilyTreesPage() {
       if (editing) {
         const { error } = await supabase.from('family_trees').update(form).eq('id', editing.id);
         if (error) throw error;
+        toast.success('Family tree updated');
       } else {
         const { error } = await supabase.from('family_trees').insert({ ...form, organization_id: orgId });
         if (error) throw error;
+        toast.success('Family tree created');
       }
       setDialogOpen(false);
       loadTrees();
-    } catch {
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Operation failed');
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async (id: string) => {
-    await supabase.from('family_trees').delete().eq('id', id);
+    const { error } = await supabase.from('family_trees').delete().eq('id', id);
+    if (error) { toast.error('Delete failed'); return; }
+    toast.success('Family tree deleted');
     loadTrees();
   };
 
@@ -126,10 +161,11 @@ export default function FamilyTreesPage() {
     const newSet = new Set(childAssignments);
     if (checked) {
       newSet.add(userId);
-      await supabase.from('family_tree_children').insert({
+      const { error } = await supabase.from('family_tree_children').insert({
         family_tree_id: selectedTree.id,
         child_user_id: userId,
       }).maybeSingle();
+      if (error) { toast.error('Failed to add child'); return; }
     } else {
       newSet.delete(userId);
       await supabase.from('family_tree_children')
@@ -190,16 +226,13 @@ export default function FamilyTreesPage() {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold">Family Trees</h1>
-        <Button onClick={openCreate}>
-          <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-          Create Family Tree
-        </Button>
+        <Button onClick={openCreate}><Plus className="h-4 w-4 mr-2" /> Create Family Tree</Button>
       </div>
 
       {loading ? (
         <div className="space-y-3"><Skeleton className="h-12 w-full" /><Skeleton className="h-12 w-full" /></div>
       ) : trees.length === 0 ? (
-        <Card><CardContent className="p-6 text-center"><svg className="h-8 w-8 mx-auto text-gray-400 mb-2" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="5" r="2"/><path d="M12 7v6"/><circle cx="12" cy="17" r="2"/></svg><p className="text-gray-500">No family trees created yet</p></CardContent></Card>
+        <Card><CardContent className="p-6 text-center"><GitFork className="h-8 w-8 mx-auto text-muted-foreground mb-2" /><p className="text-muted-foreground">No family trees created yet</p></CardContent></Card>
       ) : (
         <Card>
           <Table>
@@ -214,20 +247,22 @@ export default function FamilyTreesPage() {
               {trees.map((tree) => (
                 <TableRow key={tree.id}>
                   <TableCell className="font-medium">{tree.name}</TableCell>
-                  <TableCell className="text-sm text-gray-500">{getParentName(tree)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">
+                    {getParentName(tree)}
+                  </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => openOrganogram(tree)}>
-                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+                      <Button variant="ghost" size="icon" onClick={() => openOrganogram(tree)} title="View organogram">
+                        <Eye className="h-4 w-4" />
                       </Button>
-                      <Button variant="ghost" size="icon" onClick={() => openChildren(tree)}>
-                        <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+                      <Button variant="ghost" size="icon" onClick={() => openChildren(tree)} title="Manage children">
+                        <Users className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(tree)}>
                         <svg className="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => handleDelete(tree.id)}>
-                        <svg className="h-4 w-4 text-red-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+                        <Trash2 className="h-4 w-4 text-destructive" />
                       </Button>
                     </div>
                   </TableCell>
@@ -239,94 +274,96 @@ export default function FamilyTreesPage() {
       )}
 
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-        <DialogHeader>
-          <DialogTitle>{editing ? 'Edit Family Tree' : 'Create Family Tree'}</DialogTitle>
-          <DialogDescription>
-            Define a parent and assign children for family-style drop-off clock-ins.
-          </DialogDescription>
-        </DialogHeader>
-        <div className="space-y-4">
-          <div className="space-y-2">
-            <Label>Tree Name</Label>
-            <Input placeholder="e.g. Smith Family" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{editing ? 'Edit Family Tree' : 'Create Family Tree'}</DialogTitle>
+            <DialogDescription>
+              Define a parent and assign children for family-style drop-off clock-ins.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Tree Name</Label>
+              <Input placeholder="e.g. Smith Family" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
+            </div>
+            <div className="space-y-2">
+              <Label>Parent / Guardian</Label>
+              <Select value={form.parent_user_id} onValueChange={(v) => setForm({ ...form, parent_user_id: v })}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select parent user..." />
+                </SelectTrigger>
+                <SelectContent>
+                  {employees.map((emp) => (
+                    <SelectItem key={emp.user_id} value={emp.user_id}>
+                      {emp.display_name} {emp.employee_code ? `(${emp.employee_code})` : ''}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
           </div>
-          <div className="space-y-2">
-            <Label>Parent / Guardian</Label>
-            <select
-              value={form.parent_user_id}
-              onChange={(e) => setForm({ ...form, parent_user_id: e.target.value })}
-              className="border rounded-md px-3 py-2 text-sm bg-white w-full"
-            >
-              <option value="">Select parent user...</option>
-              {employees.map((emp) => (
-                <option key={emp.user_id} value={emp.user_id}>
-                  {emp.display_name} {emp.employee_code ? `(${emp.employee_code})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <DialogFooter>
-          <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || !form.name || !form.parent_user_id}>Save</Button>
-        </DialogFooter>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button onClick={handleSave} disabled={saving || !form.name || !form.parent_user_id}>Save</Button>
+          </DialogFooter>
+        </DialogContent>
       </Dialog>
 
       <Dialog open={!!selectedTree} onOpenChange={(o) => { if (!o) setSelectedTree(null); }}>
-        <DialogHeader>
-          <DialogTitle>Children: {selectedTree?.name}</DialogTitle>
-          <DialogDescription>Select team members who clock in as part of this family tree.</DialogDescription>
-        </DialogHeader>
-        {assignLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <svg className="h-6 w-6 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" strokeDasharray="31.4 31.4"/></svg>
-          </div>
-        ) : (
-          <ScrollArea className="h-80">
-            <div className="space-y-2">
-              {filteredEmployees.map((emp) => (
-                <label key={emp.user_id} className="flex items-center gap-3 p-2 rounded-md hover:bg-gray-50 cursor-pointer">
-                  <Checkbox
-                    checked={childAssignments.has(emp.user_id)}
-                    onCheckedChange={(c) => toggleChild(emp.user_id, c)}
-                  />
-                  <div>
-                    <p className="text-sm font-medium">{emp.display_name}</p>
-                    <p className="text-xs text-gray-500">{emp.email}</p>
-                  </div>
-                </label>
-              ))}
-            </div>
-          </ScrollArea>
-        )}
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Children: {selectedTree?.name}</DialogTitle>
+            <DialogDescription>Select team members who clock in as part of this family tree.</DialogDescription>
+          </DialogHeader>
+          {assignLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : (
+            <ScrollArea className="h-80">
+              <div className="space-y-2">
+                {filteredEmployees.map((emp) => (
+                  <label key={emp.user_id} className="flex items-center gap-3 p-2 rounded-md hover:bg-muted cursor-pointer">
+                    <Checkbox
+                      checked={childAssignments.has(emp.user_id)}
+                      onCheckedChange={(c) => toggleChild(emp.user_id, c === true)}
+                    />
+                    <div>
+                      <p className="text-sm font-medium">{emp.display_name}</p>
+                      <p className="text-xs text-muted-foreground">{emp.email}</p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </ScrollArea>
+          )}
+        </DialogContent>
       </Dialog>
 
       <Dialog open={!!viewTree} onOpenChange={(o) => { if (!o) setViewTree(null); }}>
-        <DialogHeader>
-          <DialogTitle>{viewTree?.name}</DialogTitle>
-        </DialogHeader>
-        {viewLoading ? (
-          <div className="flex items-center justify-center py-8">
-            <svg className="h-6 w-6 animate-spin text-blue-600" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" strokeDasharray="31.4 31.4"/></svg>
-          </div>
-        ) : viewParent ? (
-          <FamilyTreeOrganogram
-            parentName={viewParent.display_name}
-            parentCode={viewParent.employee_code}
-            parentClockedIn={recentClockEvents.has(viewParent.user_id)}
-            members={viewChildren.map((c) => {
-              const cp = viewChildProfiles.get(c.child_user_id);
-              return {
-                user_id: c.child_user_id,
-                display_name: cp?.display_name || '(deleted)',
-                employee_code: cp?.employee_code,
-                clocked_in: recentClockEvents.has(c.child_user_id),
-              };
-            })}
-          />
-        ) : (
-          <p className="text-gray-500 text-center py-4">Parent user not found</p>
-        )}
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{viewTree?.name}</DialogTitle>
+          </DialogHeader>
+          {viewLoading ? (
+            <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+          ) : viewParent ? (
+            <FamilyTreeOrganogram
+              parentName={viewParent.display_name}
+              parentCode={viewParent.employee_code}
+              parentClockedIn={recentClockEvents.has(viewParent.user_id)}
+              members={viewChildren.map((c) => {
+                const cp = viewChildProfiles.get(c.child_user_id);
+                return {
+                  user_id: c.child_user_id,
+                  display_name: cp?.display_name || '(deleted)',
+                  employee_code: cp?.employee_code,
+                  clocked_in: recentClockEvents.has(c.child_user_id),
+                };
+              })}
+            />
+          ) : (
+            <p className="text-muted-foreground text-center py-4">Parent user not found</p>
+          )}
+        </DialogContent>
       </Dialog>
     </div>
   );
