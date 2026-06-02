@@ -8,31 +8,39 @@ import { createClient } from '@/lib/supabase/client'
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter()
   const pathname = usePathname()
-  const [loading, setLoading] = useState(true)
+  const [ready, setReady] = useState(false)
   const [profile, setProfile] = useState<any>(null)
   const [orgName, setOrgName] = useState('')
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [mounted, setMounted] = useState(false)
+
+  useEffect(() => { setMounted(true) }, [])
 
   useEffect(() => {
+    let cancelled = false
     const check = async () => {
-      const supabase = createClient()
-      const { data: { user } } = await supabase.auth.getUser()
-      if (!user) { router.push('/login'); setLoading(false); return }
+      try {
+        const supabase = createClient()
+        const { data: { user } } = await supabase.auth.getUser()
+        if (cancelled) return
+        if (!user) { router.push('/login'); return }
 
-      const { data: prof } = await supabase
-        .from('profiles').select('*').eq('user_id', user.id).maybeSingle()
+        const { data: prof } = await supabase.from('profiles').select('*').eq('user_id', user.id).maybeSingle()
+        if (cancelled) return
+        if (!prof) { router.push('/login'); return }
+        setProfile(prof)
 
-      if (!prof) { router.push('/login'); setLoading(false); return }
-      setProfile(prof)
-
-      if (prof.organization_id) {
-        const { data: org } = await supabase
-          .from('organizations').select('name').eq('id', prof.organization_id).maybeSingle()
-        if (org) setOrgName(org.name)
+        if (prof.organization_id) {
+          const { data: org } = await supabase.from('organizations').select('name').eq('id', prof.organization_id).maybeSingle()
+          if (!cancelled && org) setOrgName(org.name)
+        }
+      } catch {
+        if (!cancelled) router.push('/login')
       }
-      setLoading(false)
+      if (!cancelled) setReady(true)
     }
     check()
+    return () => { cancelled = true }
   }, [])
 
   const handleSignOut = async () => {
@@ -40,7 +48,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     router.push('/login')
   }
 
-  if (loading) {
+  if (!mounted || !ready) {
     return <div className="min-h-screen flex items-center justify-center"><div className="animate-spin h-8 w-8 border-4 border-blue-600 border-t-transparent rounded-full" /></div>
   }
 
