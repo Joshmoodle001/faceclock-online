@@ -62,22 +62,29 @@ export function MapPanel() {
 
     if (!profile) { setLoading(false); return; }
 
-    setOrgId(profile.organization_id);
-    await loadEmployees();
+    const oid = profile.organization_id;
+    setOrgId(oid);
+
+    await loadGeofencesForOrg(oid);
+    await loadSitesForOrg(oid);
+    await loadEmployeesForOrg(oid);
+    setLoading(false);
   };
 
-  const loadEmployees = async () => {
+  const loadEmployees = () => {
     if (!orgId) return;
+    loadEmployeesForOrg(orgId);
+  };
 
+  const loadEmployeesForOrg = async (oid: string) => {
     const { data: openSessions } = await supabase
       .from('attendance_sessions')
       .select('user_id, started_at')
-      .eq('organization_id', orgId)
+      .eq('organization_id', oid)
       .eq('status', 'open');
 
     if (!openSessions || openSessions.length === 0) {
       setEmployees([]);
-      setLoading(false);
       return;
     }
 
@@ -116,12 +123,12 @@ export function MapPanel() {
       }
     }
 
-    const employees: MapEmployee[] = [];
+    const employeeList: MapEmployee[] = [];
     for (const session of openSessions as any[]) {
       const startedAt = new Date(session.started_at);
       const isLate = startedAt > nineAmToday;
       const loc = locMap.get(session.user_id);
-      employees.push({
+      employeeList.push({
         user_id: session.user_id,
         display_name: nameMap.get(session.user_id) || 'Unknown',
         latitude: loc?.lat || 0,
@@ -132,23 +139,28 @@ export function MapPanel() {
       });
     }
 
-    setEmployees(employees);
-    setLoading(false);
+    setEmployees(employeeList);
   };
 
   const loadGeofences = async () => {
     if (!orgId) return;
-    const { data } = await supabase.from('geofences').select('*').eq('organization_id', orgId).eq('active', true);
+    loadGeofencesForOrg(orgId);
+  };
+
+  const loadGeofencesForOrg = async (oid: string) => {
+    const { data } = await supabase.from('geofences').select('*').eq('organization_id', oid).eq('active', true);
     setGeofences(data as Geofence[] || []);
   };
 
   const loadSites = async () => {
     if (!orgId) return;
-    const { data } = await supabase.from('sites').select('*').eq('organization_id', orgId).eq('active', true);
-    setSites(data as Site[] || []);
+    loadSitesForOrg(orgId);
   };
 
-  const hasLocations = employees.some(e => e.latitude !== 0 && e.longitude !== 0);
+  const loadSitesForOrg = async (oid: string) => {
+    const { data } = await supabase.from('sites').select('*').eq('organization_id', oid).eq('active', true);
+    setSites(data as Site[] || []);
+  };
 
   if (loading) {
     return (
@@ -157,13 +169,11 @@ export function MapPanel() {
           <Skeleton className="h-5 w-24" />
         </CardHeader>
         <CardContent>
-          <Skeleton className="h-[350px] w-full rounded-lg" />
+          <Skeleton className="h-[400px] w-full rounded-lg" />
         </CardContent>
       </Card>
     );
   }
-
-  if (!hasLocations) return null;
 
   return (
     <Card>

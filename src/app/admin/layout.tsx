@@ -19,7 +19,6 @@ import {
   GitFork,
 } from 'lucide-react';
 import { useTheme } from 'next-themes';
-import { MapPanel } from '@/components/MapPanel';
 import type { Profile, Role } from '@/types';
 
 interface NavItem {
@@ -200,18 +199,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </aside>
 
       {/* Main content */}
-      <div className="flex-1 flex flex-col min-h-screen">
-        <header className="md:hidden flex items-center justify-between h-16 px-4 border-b">
+      <div className="flex-1 flex flex-col min-h-screen ml-0 md:ml-0">
+        <header className="md:hidden flex items-center justify-between h-16 px-4 border-b bg-background">
           <Button variant="ghost" size="icon" onClick={() => setMobileOpen(true)}>
             <Menu className="h-5 w-5" />
           </Button>
           <span className="font-bold">FaceAttend</span>
           <div className="w-10" />
         </header>
-        <main className="flex-1 flex flex-col">
-          <div className="flex-1">{children}</div>
-          <MapPanel />
-        </main>
+        <main className="flex-1 p-4 sm:p-6 lg:p-8">{children}</main>
       </div>
     </div>
   );

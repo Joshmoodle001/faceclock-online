@@ -59,10 +59,16 @@ export function LiveMap({ employees, geofences, sites, onMarkerClick }: LiveMapP
       container: containerRef.current,
       style: 'https://tiles.openfreemap.org/styles/liberty',
       center: [28.0473, -26.2041],
-      zoom: 13,
+      zoom: 15,
+      maxZoom: 19,
+      minZoom: 3,
+      touchZoomRotate: true,
+      touchPitch: true,
+      dragRotate: true,
     });
 
-    map.addControl(new maplibregl.NavigationControl(), 'top-right');
+    map.addControl(new maplibregl.NavigationControl({ showCompass: true, showZoom: true }), 'top-right');
+    map.addControl(new maplibregl.ScaleControl({ unit: 'metric' }), 'bottom-left');
     mapRef.current = map;
 
     map.on('load', () => {

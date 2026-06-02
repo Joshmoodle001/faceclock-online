@@ -607,7 +607,7 @@ export default function HomePage() {
   const dateStr = currentTime.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
   return (
-    <div className="min-h-screen p-4 max-w-lg mx-auto space-y-4">
+    <div className="min-h-screen p-4 max-w-lg md:max-w-2xl lg:max-w-3xl mx-auto space-y-4">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
@@ -696,7 +696,13 @@ export default function HomePage() {
         />
       )}
 
-      <div className={`relative aspect-video bg-muted rounded-lg overflow-hidden transition-all duration-700 ${cameraActive ? 'opacity-100 scale-100 mb-4' : 'opacity-0 scale-95 h-0 mb-0 pointer-events-none'}`}>
+      <div className={`relative aspect-video bg-muted rounded-lg overflow-hidden transition-all duration-700 ring-2 ring-offset-2 ${
+        cameraActive ? 'opacity-100 scale-100 mb-4' : 'opacity-0 scale-95 h-0 mb-0 pointer-events-none'
+      } ${
+        faceInFrame && bestMatchScore >= MATCH_THRESHOLD ? 'ring-emerald-500 ring-offset-emerald-100 dark:ring-offset-emerald-900' :
+        faceInFrame ? 'ring-blue-300 ring-offset-blue-100 dark:ring-offset-blue-900' :
+        'ring-transparent ring-offset-transparent'
+      }`}>
         <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover -scale-x-100" />
         <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none -scale-x-100" />
         {cameraPermission !== 'granted' && (

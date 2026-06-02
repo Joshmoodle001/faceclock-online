@@ -165,12 +165,12 @@ serve(async (req: Request): Promise<Response> => {
     }
 
     const csvContent = generateCsv(lines);
-    const filename = `payroll_${input.payroll_run_id}_${Date.now()}.csv`;
+    const filePath = `${payrollRun.organization_id}/payroll_${input.payroll_run_id}_${Date.now()}.csv`;
     const blob = new TextEncoder().encode(csvContent);
 
     const { error: uploadError } = await supabase.storage
       .from("payroll-exports")
-      .upload(filename, blob, {
+      .upload(filePath, blob, {
         contentType: "text/csv",
         upsert: true,
       });
@@ -181,7 +181,7 @@ serve(async (req: Request): Promise<Response> => {
 
     const { data: signedUrlData, error: signedUrlError } = await supabase.storage
       .from("payroll-exports")
-      .createSignedUrl(filename, 3600);
+      .createSignedUrl(filePath, 3600);
 
     if (signedUrlError || !signedUrlData) {
       return errorResponse(500, "Failed to generate signed URL");
@@ -192,12 +192,12 @@ serve(async (req: Request): Promise<Response> => {
       action: "payroll_exported",
       entity_type: "payroll_run",
       entity_id: input.payroll_run_id,
-      details: { filename, url: signedUrlData.signedUrl, line_count: lines.length },
+      details: { filename: filePath, url: signedUrlData.signedUrl, line_count: lines.length },
     });
 
     return new Response(JSON.stringify({
       url: signedUrlData.signedUrl,
-      filename,
+      filename: filePath,
     }), {
       status: 200,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
