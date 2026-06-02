@@ -32,6 +32,11 @@ export default function OrganizationsPage() {
   const [orgs, setOrgs] = useState<Organization[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState('');
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editing, setEditing] = useState<Organization | null>(null);
+  const [form, setForm] = useState({ name: '', slug: '', default_timezone: 'Africa/Johannesburg', currency: 'ZAR', status: 'active' });
+  const [adminForm, setAdminForm] = useState({ email: '', displayName: '', password: '' });
+  const [saving, setSaving] = useState(false);
 
   useEffect(() => {
     const init = async () => {
