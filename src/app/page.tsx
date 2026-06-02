@@ -111,11 +111,15 @@ export default function HomePage() {
         const { data: { user: u } } = await supabase.auth.getUser();
         setAuthUser(u);
 
-        const { data: enrollments, error: enrollError } = await supabase
+        const kioskOrgId = process.env.NEXT_PUBLIC_KIOSK_ORG_ID
+        let query = supabase
           .from('face_enrollments')
           .select('user_id, organization_id, face_descriptor')
           .eq('active', true)
-          .neq('status', 'rejected');
+          .neq('status', 'rejected')
+        if (kioskOrgId) query = query.eq('organization_id', kioskOrgId)
+
+        const { data: enrollments, error: enrollError } = await query
 
         if (enrollError) {
           console.error('Failed to load enrollments:', enrollError);
