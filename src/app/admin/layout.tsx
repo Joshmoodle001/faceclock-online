@@ -34,6 +34,7 @@ const navItems: NavItem[] = [
   { href: '/admin/geofences', label: 'Geofences', icon: Circle, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/employees', label: 'Employees', icon: Users, roles: ['super_admin', 'org_admin', 'manager'] },
   { href: '/admin/enrollments', label: 'Enrollments', icon: Camera, roles: ['super_admin', 'org_admin', 'manager'] },
+  { href: '/admin/enroll', label: 'Enroll Face', icon: Camera, roles: ['super_admin', 'org_admin', 'manager'] },
   { href: '/admin/devices', label: 'Devices', icon: Monitor, roles: ['super_admin', 'org_admin'] },
   { href: '/admin/clock-events', label: 'Clock Events', icon: Clock, roles: ['super_admin', 'org_admin', 'manager'] },
   { href: '/admin/attendance', label: 'Attendance', icon: CalendarCheck, roles: ['super_admin', 'org_admin', 'manager'] },

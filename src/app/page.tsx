@@ -622,15 +622,11 @@ export default function HomePage() {
         <div className="flex items-center gap-2">
           {authUser ? (
             <>
-              <Button variant="ghost" size="sm" asChild><Link href="/app/enroll">Enroll</Link></Button>
               <Button variant="ghost" size="sm" asChild><Link href="/admin">Admin</Link></Button>
               <Button variant="ghost" size="icon" onClick={() => { supabase.auth.signOut(); router.push('/'); }}><LogOut className="h-4 w-4" /></Button>
             </>
           ) : (
-            <>
-              <Button variant="ghost" size="sm" asChild><Link href="/login?redirect=/app/enroll">Enroll</Link></Button>
-              <Button variant="ghost" size="sm" asChild><Link href="/login">Admin</Link></Button>
-            </>
+            <Button variant="ghost" size="sm" asChild><Link href="/login">Admin</Link></Button>
           )}
         </div>
       </div>
@@ -771,7 +767,6 @@ export default function HomePage() {
         <Card>
           <CardContent className="py-6 text-center space-y-3">
             <p className="text-sm text-muted-foreground">No employees enrolled yet.</p>
-            <Button size="sm" asChild><Link href={authUser ? '/app/enroll' : '/login?redirect=/app/enroll'}>Enroll Now</Link></Button>
           </CardContent>
         </Card>
       )}

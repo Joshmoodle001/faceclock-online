@@ -56,6 +56,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { href: '/admin', label: 'Dashboard' },
     { href: '/admin/employees', label: 'Employees' },
     { href: '/admin/enrollments', label: 'Enrollments' },
+    { href: '/admin/enroll', label: 'Enroll Face' },
     { href: '/admin/family-trees', label: 'Family Trees' },
   ]
 
