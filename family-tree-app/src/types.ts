@@ -44,7 +44,19 @@ export interface Profile {
   email?: string;
   employee_code?: string;
   role?: string;
+  employment_status?: string;
 }
+
+export interface AttendanceSession {
+  id: string;
+  organization_id: string;
+  user_id: string;
+  started_at: string;
+  ended_at?: string;
+  status: 'open' | 'closed';
+}
+
+export type Role = 'super_admin' | 'org_admin' | 'manager' | 'employee';
 
 export const tables = {
   family_trees: 'family_trees',
@@ -52,4 +64,6 @@ export const tables = {
   clock_events: 'clock_events',
   sites: 'sites',
   profiles: 'profiles',
+  organizations: 'organizations',
+  attendance_sessions: 'attendance_sessions',
 } as const;
